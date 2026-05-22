@@ -1,0 +1,3 @@
+display_name: XMetAI Weather Modeling
+short_description: Work on XMetAI-style weather model configs, data checks, training, export, and tensor debugging.
+default_prompt: Use the XMetAI weather modeling workflow to inspect the repository, choose the right reference, and verify the requested change.
