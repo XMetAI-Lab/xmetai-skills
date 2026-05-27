@@ -2,7 +2,7 @@
 
 This page is written for the documentation website. For installation and local setup, use the repository README.
 
-Use `xmetai-weather-modeling` for LazyConfig, Zarr/NetCDF/static data, model code, training/eval, ONNX/deploy, or tensor-shape debugging.
+Use `xmetai-weather-modeling` for model development, evaluation/inference, data analysis, or debugging in XMetAI-style weather model repositories.
 
 ## Workflow
 
@@ -14,9 +14,7 @@ Use `xmetai-weather-modeling` for LazyConfig, Zarr/NetCDF/static data, model cod
 
 ## Task Routing
 
-- Workspace and repo conventions: `references/workspace-contract.md`
-- LazyConfig patterns: `references/lazyconfig-patterns.md`
-- Zarr, NetCDF, and static data: `references/zarr-static-contracts.md`
-- Model contracts and shape debugging: `references/model-contracts.md`, `references/shape-debugging.md`
-- Training and evaluation operations: `references/training-eval-ops.md`
-- ONNX export and deployment: `references/inference-export-deploy.md`
+- Model development: `references/model-contracts.md`
+- Evaluation and inference: `references/inference-export-deploy.md`
+- Data analysis: `references/zarr-static-contracts.md`
+- Debugging: `references/shape-debugging.md`

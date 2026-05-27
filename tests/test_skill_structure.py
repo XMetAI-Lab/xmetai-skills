@@ -26,16 +26,10 @@ def test_skill_frontmatter() -> None:
 def test_referenced_files_exist() -> None:
     text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     for rel in [
-        "references/workspace-contract.md",
-        "references/tool-compatibility.md",
-        "references/data-safety.md",
         "references/zarr-static-contracts.md",
-        "references/lazyconfig-patterns.md",
         "references/model-contracts.md",
-        "references/training-eval-ops.md",
         "references/inference-export-deploy.md",
         "references/shape-debugging.md",
-        "references/troubleshooting.md",
     ]:
         assert rel in text
         assert (SKILL / rel).exists()

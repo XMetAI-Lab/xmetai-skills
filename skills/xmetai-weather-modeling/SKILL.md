@@ -11,7 +11,7 @@ metadata:
 
 1. Locate the active repo and read local rules: `AGENTS.md`, `RTK.md`, `CONTRIBUTING.md`, README.
 2. Check local changes before editing.
-3. Classify the task: config, data, model, train/eval, export/deploy, or shape debug.
+3. Classify the task: model development, evaluation/inference, data analysis, or debugging.
 4. Load only the matching reference.
 
 ## Non-Negotiable Rules
@@ -24,16 +24,10 @@ metadata:
 
 ## Reference Routing
 
-- Repo workflow: `references/workspace-contract.md`
-- Portability: `references/tool-compatibility.md`
-- Zarr safety: `references/data-safety.md`
-- Zarr/static schema: `references/zarr-static-contracts.md`
-- LazyConfig: `references/lazyconfig-patterns.md`
-- Model code: `references/model-contracts.md`
-- Train/eval: `references/training-eval-ops.md`
-- Export/deploy: `references/inference-export-deploy.md`
-- Shape bugs: `references/shape-debugging.md`
-- Failures: `references/troubleshooting.md`
+- Model development: `references/model-contracts.md`
+- Evaluation and inference: `references/inference-export-deploy.md`
+- Data analysis: `references/zarr-static-contracts.md`
+- Debugging: `references/shape-debugging.md`
 
 ## Script Routing
 
