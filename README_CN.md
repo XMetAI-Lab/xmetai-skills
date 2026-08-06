@@ -1,6 +1,6 @@
 # xmetai-skills
 
-面向 XMetAI 类气象模型工作的 agent skills 仓库，覆盖工作区检查、LazyConfig 审查、Zarr/NetCDF/静态数据检查、模型 shape 调试、训练评估、ONNX 导出和部署审查。
+面向 XMetAI 类气象模型工作的 agent skills 仓库，覆盖工作区检查、气象数据需求提取与下载前规划、LazyConfig 审查、Zarr/NetCDF/静态数据检查、模型 shape 调试、训练评估、ONNX 导出和部署审查。
 
 可安装的 skill 目录是：
 
@@ -65,6 +65,7 @@ python -m pytest -q
 打开目标气象模型仓库后，让 agent 使用 `xmetai-weather-modeling` 处理以下任务：
 
 - 创建或审查 LazyConfig。
+- 提取气象数据需求并制定下载前计划，不执行下载或数据写入。
 - 检查 Zarr、NetCDF、静态数据和数据集 contract。
 - 审查模型 contract，调试 tensor shape。
 - 检查训练、评估、实验报告、ONNX 导出和部署流程。

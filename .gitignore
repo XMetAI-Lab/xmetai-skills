@@ -12,3 +12,6 @@ venv/
 output/
 reports/
 *.log
+
+# WorkBuddy skill import metadata (keep out of repo)
+_user_meta.json

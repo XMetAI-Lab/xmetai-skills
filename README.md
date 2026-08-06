@@ -1,6 +1,6 @@
 # xmetai-skills
 
-Agent skills for XMetAI-style weather model work, including workspace inspection, LazyConfig review, Zarr/NetCDF/static-data checks, model-shape debugging, training/evaluation operations, ONNX export, and deployment review.
+Agent skills for XMetAI-style weather model work, including workspace inspection, meteorological data requirement extraction and pre-download planning, LazyConfig review, Zarr/NetCDF/static-data checks, model-shape debugging, training/evaluation operations, ONNX export, and deployment review.
 
 The installable skill is:
 
@@ -65,6 +65,7 @@ The tests check that the skill entrypoint, references, agent metadata, and helpe
 Open the target weather-model repository, then ask the agent to use `xmetai-weather-modeling` for one of these task types:
 
 - LazyConfig creation or review.
+- Meteorological data requirement extraction and pre-download planning without downloading or writing data.
 - Zarr, NetCDF, static-data, and dataset-contract inspection.
 - Model contract review and tensor-shape debugging.
 - Training, evaluation, experiment reporting, ONNX export, and deployment checks.
