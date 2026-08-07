@@ -17,4 +17,5 @@ Use `xmetai-weather-modeling` for model development, evaluation/inference, data 
 - Model development: `references/model-contracts.md`
 - Evaluation and inference: `references/inference-export-deploy.md`
 - Data analysis: `references/zarr-static-contracts.md`
+- Data download planning: `references/data-download-planning.md`
 - Debugging: `references/shape-debugging.md`

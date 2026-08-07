@@ -12,14 +12,15 @@ Use **Data analysis** instead when data already exists and the task is to inspec
 
 ## Workflow
 
-1. Inspect the target repository and identify the exact entry config requested by the user.
-2. Trace its reused base configs and dataset definitions.
-3. Extract the dataset contract: variables, levels, time range, frequency, spatial extent, resolution, format, static fields, and statistics sidecars.
-4. Classify each requirement as confirmed, optional, or pending confirmation.
-5. Identify the documented or proposed data source, license, authentication method, and variable-name mapping.
-6. Record the destination, estimated size when known, and existing-file policy.
-7. Produce a Markdown, YAML, or JSON pre-download plan.
-8. Stop before any network request or filesystem write.
+1. Inspect the target repository and list candidate entry configs (for example, `configs/*.py`).
+2. If more than one candidate exists, present them with their key differences (dataset path, resolution, frequency, time range, variable count) and ask the user which model(s) the plan should cover. Multiple selections are allowed; proceed in multi-config mode when the user selects more than one.
+3. For each selected entry config, trace its reused base configs and dataset definitions.
+4. Extract the dataset contract: variables, levels, time range, frequency, spatial extent, resolution, format, static fields, and statistics sidecars.
+5. Classify each requirement as confirmed, optional, or pending confirmation.
+6. Identify the documented or proposed data source, license, authentication method, and variable-name mapping.
+7. Record the destination, estimated size when known, and existing-file policy.
+8. Produce a Markdown, YAML, or JSON pre-download plan.
+9. Stop before any network request or filesystem write.
 
 ## Requirement Extraction
 
@@ -46,9 +47,22 @@ Do not describe optional or pending items as mandatory downloads. Variable lists
 
 ### Config Isolation
 
-Resolve one entry config and trace only its imported base configs and dataset definitions. Treat similarly named configs as separate contracts when their data path, grid, frequency, time range, variables, static channels, or preprocessing differ.
+Before extracting requirements, list the candidate entry configs and confirm with the user which model(s) the plan covers. If the user selects one config, resolve only that entry config and trace only its imported base configs and dataset definitions.
 
-If a family name such as `ViT` matches multiple configs, list the variants briefly and ask which entry config is intended before producing a definitive plan. Do not merge requirements from S2S, land, high-resolution, ensemble, or other variants.
+Treat similarly named configs as separate contracts when their data path, grid, frequency, time range, variables, static channels, or preprocessing differ. If a family name such as `ViT` matches multiple configs, present the variants and ask which entry config is intended before producing a definitive plan.
+
+Do not merge requirements from S2S, land, high-resolution, ensemble, or other variants into a single dataset contract. In multi-config mode, keep each config's contract separate and only deduplicate shared datasets in the aggregated list.
+
+### Multi-Config Mode
+
+When the user selects more than one entry config, produce a multi-config plan instead of a single-config plan.
+
+- Extract requirements per config and keep each config's contract in its own block.
+- List a shared dataset once when two or more configs use the same dataset path, resolution, frequency, and variable set; note every config that uses it.
+- Never merge conflicting contracts: when configs differ in grid, frequency, time range, or variables, list separate dataset entries even if they share a source (for example, a 1.5° daily S2S dataset and a 0.25° 6-hourly ensemble dataset are separate entries).
+- Aggregate size estimates after deduplication, and report both the per-config total and the deduplicated grand total.
+- Report preflight status per config; shared items may be confirmed once and referenced by the configs that share them.
+- Output as a single plan document with per-config blocks plus a deduplicated summary, or as one plan file per config plus a summary manifest.
 
 ### Claims Requiring Direct Verification
 
@@ -62,11 +76,12 @@ If a family name such as `ViT` matches multiple configs, list the variants brief
 
 Record:
 
-- Selected config and traced base configs.
+- Selected config(s) and traced base configs (per config in multi-config mode).
 - Dataset and proposed source.
 - Confirmed variables and levels.
 - Optional requirements.
 - Pending confirmations.
+- Shared datasets and deduplication notes (multi-config mode).
 - Start and end time.
 - Temporal frequency.
 - Spatial extent and resolution.
@@ -100,13 +115,14 @@ Use `assets/templates/data_download_plan.md` as the standard output structure. F
 The template covers:
 
 ```text
-Selected config
-Confirmed requirements
+Selected config(s)
+Confirmed requirements (one block per config)
+Shared datasets and deduplication (multi-config)
 Optional requirements
 Pending confirmation
 Data source
 Destination and estimated size
-Preflight status
+Preflight status (per config)
 Next step
 ```
 
