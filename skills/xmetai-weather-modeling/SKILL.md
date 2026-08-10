@@ -45,6 +45,7 @@ metadata:
 - `inspect_workspace.py`: repo summary.
 - `inspect_zarr_schema.py`: read-only Zarr schema/sample.
 - `inspect_static_nc.py`: read-only static NetCDF schema.
+- `inspect_data_format.py`: read-only format detection and metadata summary.
 - `check_config_contract.py`, `summarize_lazy_config.py`: config checks.
 - `build_train_command.py`: print train/eval/export command only.
 - `check_onnx_io.py`: ONNX IO summary.
