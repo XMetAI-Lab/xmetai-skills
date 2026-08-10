@@ -68,10 +68,17 @@ Repeat per dataset when multiple datasets or configs are involved.
 
 Do not include credentials, tokens, passwords, or API keys.
 
+## Format Conversion Chain
+
+Record the chain from the downloaded format to the format the selected config consumes. Fill one row per dataset.
+
+| Dataset | Download format | Reading toolchain | Target format | Conversion step | Feasibility |
+|---|---|---|---|---|---|
+| | | | | | Pending |
+
 ## Destination and Estimated Size
 
 - Destination:
-- Expected format:
 - Expected file grouping:
 - Estimated file count:
 - Estimated size per config:

@@ -85,7 +85,7 @@ Record:
 - Start and end time.
 - Temporal frequency.
 - Spatial extent and resolution.
-- Expected format and layout.
+- Download format, target format, and conversion step (see Format Conversion Chain).
 - Static fields and statistics sidecars expected by the config.
 - Destination directory.
 - Estimated file count and size when known.
@@ -93,6 +93,23 @@ Record:
 - Existing-file and overwrite policy.
 
 Prefer a machine-readable YAML or JSON manifest when the plan will be reused. Creating a manifest file is itself a filesystem write; print it in the response unless the user explicitly asks to save it.
+
+## Format Conversion Chain
+
+A download plan must record the full chain from the downloaded format to the format the selected config consumes, so the plan stays actionable without rediscovering tooling later.
+
+Map the chain for every planned dataset:
+
+- **Download format**: the format the provider offers (for example, GRIB, NetCDF, CINRAD binary, NPZ).
+- **Reading toolchain**: the library that reads that format (for example, xarray for NetCDF, cfgrib or eccodes for GRIB, the core radar reader for CINRAD binaries).
+- **Target format**: the format the selected config consumes (Zarr in this model library, with `mean`, `std`, and `weight` sidecars).
+- **Conversion step**: the concrete transformation (for example, `NetCDF -> Zarr via xarray.to_zarr`, including variable rename, time alignment, and coordinate normalization).
+
+Rules:
+
+- When a provider offers multiple download formats, prefer the one that matches the available conversion toolchain and record the choice and its reason.
+- Record conversion dependencies explicitly; do not assume a reader library is available at execution time.
+- The plan marks the chain as feasible or pending; executing the conversion belongs to Data preprocessing, not to this route.
 
 ## Preflight Status
 
@@ -121,6 +138,7 @@ Shared datasets and deduplication (multi-config)
 Optional requirements
 Pending confirmation
 Data source
+Format conversion chain
 Destination and estimated size
 Preflight status (per config)
 Next step
