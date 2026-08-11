@@ -31,6 +31,15 @@ try:
 except ImportError:  # pragma: no cover - environment without parsing deps
     xr = None
 
+
+def cfgrib_available() -> bool:
+    try:
+        import cfgrib  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 EXTENSION_FORMATS = {
     ".nc": "netcdf",
     ".nc4": "netcdf",
@@ -96,6 +105,8 @@ def read_metadata(target: Path, fmt: str) -> dict[str, Any]:
     try:
         if fmt == "zarr":
             ds = xr.open_zarr(target)
+        elif fmt == "grib":
+            ds = xr.open_dataset(target, engine="cfgrib")
         else:
             ds = xr.open_dataset(target)
         try:
@@ -118,8 +129,6 @@ def classify(target: Path, ext_fmt: str | None, magic_fmt: str | None) -> str:
     """Layer 1 status: recognized / mismatch / decode-pending / unsupported."""
     if is_zarr_dir(target):
         return "recognized"
-    if ext_fmt == "grib" and magic_fmt == "grib":
-        return "decode-pending"
     if ext_fmt in ("npy", "npz"):
         return "recognized"
     # NetCDF classic (CDF) and NetCDF-4 (HDF5) are the same family.
@@ -164,6 +173,15 @@ def inspect_target(target: Path) -> dict[str, Any]:
         "hdf5",
     ):
         result.update(read_metadata(target, "netcdf"))
+    elif effective_format == "grib":
+        if not cfgrib_available():
+            result["status"] = "decode-pending"
+        else:
+            try:
+                result.update(read_metadata(target, "grib"))
+            except Exception as exc:  # pragma: no cover - decode errors vary
+                result["status"] = "decode-error"
+                result["metadata_error"] = f"{type(exc).__name__}: {exc}"
     return result
 
 

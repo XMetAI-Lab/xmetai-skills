@@ -36,7 +36,7 @@ Use **Data download planning** when data is missing and only a plan is requested
 |---|---|---|---|
 | NetCDF (classic CDF / NetCDF-4 HDF5) | magic `CDF` / HDF5 | xarray -> Zarr | supported |
 | Zarr store | `.zgroup` / `zarr.json` | normalize -> Zarr | supported |
-| GRIB | magic `GRIB` | needs cfgrib/eccodes | pending; `decode-pending` on Windows |
+| GRIB | magic `GRIB` | cfgrib/eccodes (pip-installable on Windows) | supported when cfgrib installed; `decode-pending` otherwise |
 | CINRAD `.bin` / NPZ | extension / magic | needs the core radar reader | pending |
 
 ## Scripts
@@ -50,7 +50,7 @@ python inspect_data_format.py --path <file-or-directory> [--json]
 python inspect_data_format.py --path <file-or-directory> --config expected.json
 ```
 
-Statuses: `recognized`, `recognized-by-magic`, `mismatch` (extension and magic disagree), `decode-pending` (GRIB on Windows), `unsupported`.
+Statuses: `recognized`, `recognized-by-magic`, `mismatch` (extension and magic disagree), `decode-pending` (GRIB without cfgrib), `decode-error` (GRIB decode failure), `unsupported`.
 
 Use `inspect_data_format.py` to identify the format and read shallow metadata. For deep structure checks on a known Zarr store (chunks, dtype, sample statistics), use `inspect_zarr_schema.py`; for static NetCDF field files, use `inspect_static_nc.py`. Do not run them redundantly for the same shallow metadata.
 

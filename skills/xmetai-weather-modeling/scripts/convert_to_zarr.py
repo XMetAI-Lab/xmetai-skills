@@ -47,6 +47,14 @@ def is_zarr_dir(path: Path) -> bool:
     return (path / ".zgroup").is_file() or (path / "zarr.json").is_file()
 
 
+def format_label(path: Path) -> str:
+    if is_zarr_dir(path):
+        return "zarr"
+    if path.suffix.lower() in (".grib", ".grb", ".grib1", ".grib2"):
+        return "grib"
+    return "netcdf"
+
+
 def open_input(path: Path):
     if xr is None:
         raise SystemExit("xarray is not installed")
@@ -163,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         ds.close()
 
     print(f"input : {input_path}")
-    print(f"format: {'zarr' if is_zarr_dir(input_path) else 'netcdf'}")
+    print(f"format: {format_label(input_path)}")
     print(f"before: {before['dims']} vars={before['variables']}")
     if steps:
         print(f"steps : {len(steps)} (see config: {args.steps_config})")
