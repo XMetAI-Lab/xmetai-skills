@@ -1,6 +1,6 @@
 ---
 name: xmetai-weather-modeling
-description: Use when working on XMetAI-style weather or climate model repositories, including meteorological data requirement extraction, pre-download planning, LazyConfig configs, Zarr or NetCDF data, static fields, model implementation, training, evaluation, ONNX export, inference deployment, or tensor-shape debugging.
+description: Use when working on XMetAI-style weather or climate model repositories, including meteorological data requirement extraction, pre-download planning, multi-config download plans, format conversion chains, data preprocessing, format detection, NetCDF or Zarr conversion, preprocessing validation, LazyConfig configs, Zarr or NetCDF data, static fields, model implementation, training, evaluation, ONNX export, inference deployment, or tensor-shape debugging.
 metadata:
   short-description: XMetAI weather model research and operations
 ---
@@ -31,6 +31,7 @@ metadata:
 - Evaluation and inference: `references/inference-export-deploy.md`
 - Data analysis: `references/zarr-static-contracts.md`
 - Data download planning: `references/data-download-planning.md`
+- Data preprocessing: `references/data-preprocessing.md`
 - Debugging: `references/shape-debugging.md`
 
 ## Data Routing
@@ -38,6 +39,7 @@ metadata:
 - Use data analysis when existing Zarr, NetCDF, or static data needs read-only inspection, comparison, or validation.
 - Use data download planning when data is missing and the task is to extract requirements, identify a source, or produce a pre-download plan.
 - Data download planning stops before network requests, file creation, conversion, statistics generation, Zarr writes, or training-readiness validation.
+- Use data preprocessing when downloaded data exists and needs format detection, normalization, conversion, or post-conversion validation.
 - Use data analysis when data already exists and needs schema, integrity, quality, statistics, or training-readiness checks.
 
 ## Script Routing
@@ -50,6 +52,8 @@ metadata:
 - `build_train_command.py`: print train/eval/export command only.
 - `check_onnx_io.py`: ONNX IO summary.
 - `zarr_write_guard.py`: mandatory guard for future write scripts.
+- `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr to Zarr.
+- `preprocess_validate.py`: variable/unit/time checks on prepared data.
 - `collect_experiment_report.py`: lightweight report.
 
 ## Validation Posture
