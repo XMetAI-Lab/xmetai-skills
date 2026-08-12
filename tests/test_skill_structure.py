@@ -60,13 +60,25 @@ def test_data_download_plan_template() -> None:
     template = SKILL / "assets" / "templates" / "data_download_plan.md"
     assert template.exists()
     text = template.read_text(encoding="utf-8")
-    assert "## Confirmed Requirements" in text
-    assert "## Optional Requirements" in text
+    assert "Bottom line" in text
+    assert "## Download List" in text
+    assert "Purpose" in text
+    assert "### Main table" in text
+    assert "Source dataset" in text
+    assert "Conversion step" in text
+    assert "Static fields / sidecars" in text
+    assert "### Download & conversion" in text
+    assert "Train" in text
+    assert "Validation / test" in text
+    assert "## Data Source" in text
     assert "## Pending Confirmation" in text
-    assert "## Preflight Status" in text
-    assert "## Scope Statement" in text
+    assert "## Next Step" in text
     reference = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
     assert "assets/templates/data_download_plan.md" in reference
+    assert "Bottom line" in reference
+    assert "evidence" in reference
+    assert "inference configs" in reference
+    assert "Static fields and statistics sidecars" in reference
 
 
 def test_data_download_cds_delivery_notes() -> None:

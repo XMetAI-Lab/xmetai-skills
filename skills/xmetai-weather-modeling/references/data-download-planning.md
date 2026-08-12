@@ -24,6 +24,11 @@ Use **Data analysis** instead when data already exists and the task is to inspec
 
 ## Requirement Extraction
 
+Classify the entry config as training or inference first:
+
+- **Training configs** (for example `*_base.py`, `*_vit.py`, `*_lora.py`): extract the full training and validation/test coverage from `train_times`/`test_times` (or the training-script defaults) and record the split explicitly in the plan. Note overlaps when the config places the same period in both train and test.
+- **Inference configs** (for example `*_infer.py`): they reuse the base dataset contract (channels, frequency, grid) but only need the history window before each inference time. Record the inference window instead of the full training coverage; `mean`/`std` sidecars remain required, `weight` is not needed, and targets are not downloaded.
+
 Check:
 
 - Dataset class and configured data paths.
@@ -83,6 +88,7 @@ Record:
 - Pending confirmations.
 - Shared datasets and deduplication notes (multi-config mode).
 - Start and end time.
+- Time coverage split: training vs validation/test ranges when the config defines them, or the inference history window for inference configs.
 - Temporal frequency.
 - Spatial extent and resolution.
 - Download format, target format, and conversion step (see Format Conversion Chain).
@@ -131,18 +137,24 @@ Never include API keys, tokens, passwords, or other credentials in plans, comman
 
 Use `assets/templates/data_download_plan.md` as the standard output structure. Fill only fields supported by repository evidence, write `Pending confirmation` when a value is unresolved, and print the completed plan in the response unless the user explicitly asks to save it.
 
+Keep the printed plan short and readable:
+
+- Lead with a one-sentence bottom line: what to download, from where, approximate size, and where to place it.
+- Show the download list as two compact tables: a main requirements table (purpose, dataset, variables, frequency, time range, grid, estimated size) and a download & conversion table (source dataset, download format, conversion step, target format). Avoid a single wide table with more than about seven columns.
+- For training, split the download rows by the config's train and validation/test time ranges; for inference, list only the inference history window and the required sidecars.
+- Name the source dataset explicitly in every download row (CDS catalogue name or author-provided data) and include the conversion step from source to target, so the plan is executable without re-deriving the download or conversion details.
+- Include static fields and statistics sidecars in the download list, with their source (separate download such as ERA5-Land invariants, or computed from the prepared dataset) and format; do not silently omit them.
+- Keep evidence and config-internal details (code paths, helper names, constants) out of the printed plan. Evidence is collected during extraction but shown only when the user asks for justification.
+- Do not print optional requirements or a preflight table as separate sections; fold "not needed" items into one line and keep pending items to those that block the download or the conversion.
+- State the recommended next step and the blocking confirmations.
+
 The template covers:
 
 ```text
-Selected config(s)
-Confirmed requirements (one block per config)
-Shared datasets and deduplication (multi-config)
-Optional requirements
-Pending confirmation
+Bottom line
+Download list (deduplicated; per-config blocks when contracts differ)
 Data source
-Format conversion chain
-Destination and estimated size
-Preflight status (per config)
+Pending confirmation (blocking items only)
 Next step
 ```
 

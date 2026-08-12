@@ -1,111 +1,45 @@
 # Data Download Plan
 
-## Selected Config(s)
+> **Bottom line**: <what to download, from which source, approximate size, where to place it. One or two sentences.>
 
-| Entry config | Purpose | Dataset path(s) | Resolution | Frequency | Time range |
-|---|---|---|---|---|---|
-| | | | | | |
-| | | | | | |
+## Download List
 
-Fill one row per selected config. For a single-config plan, fill one row and omit the multi-config sections.
+### Main table: data requirements
 
-## Confirmed Requirements
+One row per dataset and purpose, deduplicated across configs. For training, split rows by the config's train and validation/test time ranges; for inference, use the history window before the inference time. Add one row for static fields and statistics sidecars, naming their source (separate download such as ERA5-Land invariants, or computed from the prepared dataset) and format.
 
-### Config: <entry config>
-
-| Item | Requirement | Evidence |
-|---|---|---|
-| Dataset | | |
-| Variables | | |
-| Pressure levels | | |
-| Time range | | |
-| Frequency | | |
-| Spatial extent | | |
-| Resolution | | |
-| File format | | |
-| Coordinates | | |
-| Static fields | | |
-| Statistics sidecars | | |
-
-Repeat this block for every selected config. Do not merge conflicting contracts.
-
-## Shared Datasets (Deduplicated)
-
-List each dataset once when multiple configs use the same dataset path, resolution, frequency, and variable set. Omit this section for single-config plans.
-
-| Dataset | Used by configs | Variables | Time range | Frequency | Resolution | Estimated size |
+| Purpose | Dataset | Variables / channels | Frequency | Time range | Grid | Est. size |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| Train | | | | | | |
+| Validation / test | | | | | | |
+| Inference (optional) | | | | | | |
+| Static fields / sidecars | <separate download or computed> | mask / land_mask / const / mean / std / weight | n/a | one-time | model grid | small |
 
-## Optional Requirements
+Time split notes (training): record the train and validation/test ranges from `train_times`/`test_times` (or training-script defaults) and note any overlap. For inference, record the inference time plus the required history window (`hist_frames`); `mean`/`std` sidecars are still required.
 
-| Item | Description | Evidence |
-|---|---|---|
-| | | |
+### Download & conversion (one row per dataset)
 
-## Pending Confirmation
+Name the source dataset explicitly (CDS catalogue name or author-provided data) so the plan stays executable without re-deriving the download or conversion details.
 
-- [ ] Complete variable list and order
-- [ ] Variable units
-- [ ] Data source
-- [ ] License
-- [ ] Authentication method
-- [ ] Preprocessing requirements
-- [ ] Per-config conflicts (multi-config mode)
-- [ ] Other:
+| Source dataset | Download format | Conversion step | Target format |
+|---|---|---|---|
+| | | | |
 
 ## Data Source
 
-Repeat per dataset when multiple datasets or configs are involved.
+- Provider / dataset name / acquisition method:
+- License and authentication (never include credentials):
+- Variable-name mapping (only when non-obvious):
+- Contact / URL:
 
-- Provider:
-- Dataset name:
-- Acquisition method:
-- Download URL or contact:
-- License:
-- Authentication required:
-- Variable-name mapping:
+## Pending Confirmation
 
-Do not include credentials, tokens, passwords, or API keys.
+Only items that block the download or the conversion.
 
-## Format Conversion Chain
-
-Record the chain from the downloaded format to the format the selected config consumes. Fill one row per dataset.
-
-| Dataset | Download format | Reading toolchain | Target format | Conversion step | Feasibility |
-|---|---|---|---|---|---|
-| | | | | | Pending |
-
-## Destination and Estimated Size
-
-- Destination:
-- Expected file grouping:
-- Estimated file count:
-- Estimated size per config:
-- Estimated total size (deduplicated, multi-config):
-- Existing destination:
-- Overwrite allowed:
-
-## Preflight Status
-
-| Check | Config(s) | Status | Notes |
-|---|---|---|---|
-| Exact config confirmed | | Pending | |
-| Variables confirmed | | Pending | |
-| Time range confirmed | | Pending | |
-| Grid confirmed | | Pending | |
-| Source and license confirmed | | Pending | |
-| Destination confirmed | | Pending | |
-| Storage estimated | | Pending | |
-| Overwrite policy confirmed | | Pending | |
-| Secure authentication available | | Pending | |
+- [ ] ...
+- [ ] ...
 
 ## Next Step
 
 - Recommended action:
 - Blocking confirmations:
-- Responsible person or source:
-
-## Scope Statement
-
-No download, network request, conversion, file creation, statistics generation, or data modification was performed.
