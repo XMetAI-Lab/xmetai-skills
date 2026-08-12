@@ -6,6 +6,10 @@ bytes, then reads metadata (dims, coordinates, variables, units) without
 loading data values. Directories are scanned recursively; Zarr stores are
 recognized by their store marker and treated as a single target.
 
+When the content magic is a ZIP archive (for example a CDS-delivered
+archive), the result reports ``container: zip`` and the member names so the
+``mismatch`` status is actionable without guessing.
+
 Usage:
 
     python inspect_data_format.py --path <file-or-directory>
@@ -23,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -78,6 +83,15 @@ def detect_magic(path: Path) -> str | None:
         if head.startswith(magic):
             return fmt
     return None
+
+
+def zip_member_names(path: Path) -> list[str]:
+    """List ZIP member names for an actionable container hint."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return [info.filename for info in archive.infolist()]
+    except zipfile.BadZipFile:
+        return []
 
 
 def iter_targets(path: Path) -> Iterator[Path]:
@@ -166,6 +180,9 @@ def inspect_target(target: Path) -> dict[str, Any]:
         "size_bytes": target.stat().st_size,
         "status": classify(target, ext_fmt, magic_fmt),
     }
+    if magic_fmt == "zip":
+        result["container"] = "zip"
+        result["contains"] = zip_member_names(target)
 
     effective_format = ext_fmt or magic_fmt
     if result["status"] in ("recognized", "recognized-by-magic") and effective_format in (
@@ -228,6 +245,9 @@ def print_text(results: list[dict[str, Any]], summary: dict[str, int]) -> None:
             print(f"  config: matched={check['matched']} missing={check['missing']}")
         if result.get("metadata_error"):
             print(f"  metadata error: {result['metadata_error']}")
+        if result.get("container") == "zip":
+            members = ", ".join(result.get("contains") or [])
+            print(f"  container: zip (contains: {members or 'unknown'})")
         print(f"  status: {result['status']}")
     print()
     print("summary:", ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))

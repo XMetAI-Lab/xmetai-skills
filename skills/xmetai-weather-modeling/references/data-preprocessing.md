@@ -36,8 +36,19 @@ Use **Data download planning** when data is missing and only a plan is requested
 |---|---|---|---|
 | NetCDF (classic CDF / NetCDF-4 HDF5) | magic `CDF` / HDF5 | xarray -> Zarr | supported |
 | Zarr store | `.zgroup` / `zarr.json` | normalize -> Zarr | supported |
-| GRIB | magic `GRIB` | cfgrib/eccodes (pip-installable on Windows) | supported when cfgrib installed; `decode-pending` otherwise |
+| GRIB | magic `GRIB` | cfgrib/eccodes (pip-installable on Windows) | supported when cfgrib installed; `decode-pending` otherwise (multi-variable ERA5-Land GRIB: see Format Support Notes) |
 | CINRAD `.bin` / NPZ | extension / magic | needs the core radar reader | pending |
+
+## Format Support Notes
+
+CDS may deliver a ZIP archive instead of a bare data file:
+
+- `reanalysis-era5-land` returns a ZIP archive by default, even for a single-variable, single-day request. The archive contains one NetCDF or GRIB member. Add `download_format: unarchived` to the download request to receive a bare file; keep ZIP detection as a fallback because the option may not always be honoured.
+- When a delivery is a ZIP, the extension and magic bytes disagree: `inspect_data_format.py` reports `mismatch` with `container: zip` and the member names. Extract the member before running the conversion chain.
+
+GRIB decoding has an additional limit:
+
+- Multi-variable `reanalysis-era5-land` GRIB files mix GRIB edition 1 (`2t`, `tp`) and edition 2 (`sde`) messages; cfgrib cannot open the whole file as one dataset and raises `DatasetBuildError: multiple values for key 'edition'`. Each variable decodes normally with `filter_by_keys` (for example `{"shortName": "2t"}`), so prefer NetCDF for multi-variable ERA5-Land downloads, or split the GRIB by variable before conversion.
 
 ## Scripts
 

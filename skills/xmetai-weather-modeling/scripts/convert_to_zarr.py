@@ -162,7 +162,17 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"input not found: {input_path}")
 
     steps = load_steps_config(args.steps_config)
-    ds = open_input(input_path)
+    try:
+        ds = open_input(input_path)
+    except Exception as exc:
+        if format_label(input_path) == "grib":
+            raise SystemExit(
+                f"GRIB decode failed: {type(exc).__name__}: {exc}\n"
+                "Hint: multi-variable ERA5-Land GRIB mixes GRIB editions and may not "
+                "decode as a whole; prefer NetCDF for multi-variable downloads or split "
+                "the GRIB by variable (see references/data-preprocessing.md)."
+            ) from exc
+        raise
     try:
         before = describe(ds)
         ds = apply_steps(ds, steps)

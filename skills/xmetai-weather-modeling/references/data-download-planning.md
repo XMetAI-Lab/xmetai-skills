@@ -110,6 +110,8 @@ Rules:
 - When a provider offers multiple download formats, prefer the one that matches the available conversion toolchain and record the choice and its reason.
 - Record conversion dependencies explicitly; do not assume a reader library is available at execution time.
 - The plan marks the chain as feasible or pending; executing the conversion belongs to Data preprocessing, not to this route.
+- CDS delivery form is dataset-specific and must not be assumed: `reanalysis-era5-land` returns a ZIP archive by default even for single-variable requests, so record `download_format: unarchived` in the request and keep unzipping as a fallback step; `reanalysis-era5-single-levels` returns a plain file by default.
+- On the current CDS backend, ERA5 requests should use `date` plus `product_type: reanalysis`; the `year`/`month`/`day` form fails with `Duplicate value for month`. Record the exact request fields so the chain stays actionable without rediscovery.
 
 ## Preflight Status
 

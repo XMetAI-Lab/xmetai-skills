@@ -69,6 +69,27 @@ def test_data_download_plan_template() -> None:
     assert "assets/templates/data_download_plan.md" in reference
 
 
+def test_data_download_cds_delivery_notes() -> None:
+    text = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
+    assert "download_format" in text
+    assert "unarchived" in text
+    assert "Duplicate value for month" in text
+
+
+def test_data_preprocessing_container_notes() -> None:
+    text = (SKILL / "references" / "data-preprocessing.md").read_text(encoding="utf-8")
+    assert "ZIP" in text
+    assert "edition" in text
+    assert "filter_by_keys" in text
+
+
+def test_inspect_data_format_zip_hint() -> None:
+    script = (SKILL / "scripts" / "inspect_data_format.py").read_text(encoding="utf-8")
+    assert "zipfile" in script
+    assert "container" in script
+    assert "contains" in script
+
+
 def test_scripts_compile() -> None:
     for script in (SKILL / "scripts").glob("*.py"):
         py_compile.compile(str(script), doraise=True)
