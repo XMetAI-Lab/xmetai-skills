@@ -9,7 +9,7 @@ This route answers: **What format is the downloaded data, how is it normalized, 
 It covers:
 
 - Format detection: extension and magic bytes first, then metadata read.
-- Declarative conversion steps: variable rename, variable selection, time selection, resampling.
+- Declarative conversion steps: variable rename, variable selection, time selection, resampling, channel merge.
 - Guarded conversion to Zarr.
 - Post-conversion validation: variables, units, and time continuity.
 
@@ -48,7 +48,7 @@ CDS may deliver a ZIP archive instead of a bare data file:
 
 GRIB decoding has an additional limit:
 
-- Multi-variable `reanalysis-era5-land` GRIB files mix GRIB edition 1 (`2t`, `tp`) and edition 2 (`sde`) messages; cfgrib cannot open the whole file as one dataset and raises `DatasetBuildError: multiple values for key 'edition'`. Each variable decodes normally with `filter_by_keys` (for example `{"shortName": "2t"}`), so prefer NetCDF for multi-variable ERA5-Land downloads, or split the GRIB by variable before conversion.
+- Multi-variable `reanalysis-era5-land` GRIB files mix GRIB edition 1 (`2t`, `tp`) and edition 2 (`sde`) messages, so cfgrib cannot open the whole file as one dataset (`DatasetBuildError: multiple values for key 'edition'`). `convert_to_zarr.py` handles this automatically: it reads each variable with `filter_by_keys` and merges them. The merged dataset keeps the forecast-step structure (`time`, `step`, `lat`, `lon`); NetCDF remains the preferred download format when the target contract needs a plain daily or hourly `time` axis.
 
 ## Scripts
 
@@ -74,7 +74,22 @@ python convert_to_zarr.py --input in.nc --output out.zarr [--steps-config steps.
 python convert_to_zarr.py --input in.nc --output out.zarr --allow-write --ack-risk I-understand-this-mutates-zarr [--overwrite]
 ```
 
-The write path requires the Zarr write guard and explicit approval flags. Inputs: NetCDF (classic/NetCDF-4) or Zarr. Output: Zarr store only.
+The write path requires the Zarr write guard and explicit approval flags. Inputs: NetCDF (classic/NetCDF-4), Zarr, or GRIB (multi-variable mixed-edition GRIB is read per variable automatically). Output: Zarr store only.
+
+cfgrib index files (`.idx`) are not written: all GRIB reads pass `indexpath=""`. The `merge_to_data` step combines data variables into a single `data` variable with a `level`/`channel` coordinate, matching the model library layout.
+
+### compute_sidecars.py
+
+Compute the per-channel `mean` / `std` / `weight` sidecars for a prepared Zarr store.
+
+```text
+python compute_sidecars.py --input out.zarr --output-dir <dir>
+python compute_sidecars.py --input out.zarr --output-dir <dir> --allow-write [--overwrite]
+```
+
+Writes `mean.nc` / `std.nc` / `weight.nc` (1-D per-channel NetCDF arrays); the core reader prefers `.nc` over `.npy` over Zarr variables and reshapes them per channel. `weight` follows the core convention (level-scaled, optional land/ocean corrections via `--land-names` / `--ocean-names`, normalized to a maximum of 1).
+
+Compute sidecars from the unit-converted, log-transformed data before normalization. A channel with zero variance is written as `std=0`; the core normalizer treats zero std as 1.
 
 ### preprocess_validate.py
 
@@ -99,10 +114,34 @@ JSON or YAML. Unknown steps abort the plan.
     {"rename": {"total_cloud_cover": "clt"}},
     {"keep_vars": ["z", "t", "q"]},
     {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
-    {"resample": {"freq": "6h", "operator": "mean"}}
+    {"resample": {"freq": "6h", "operator": "mean"}},
+    {"units": {"q": 1000, "ttr": 1 / 3600}},
+    {"log1p": ["tp"]},
+    {"split_levels": {"vars": ["z", "t", "u", "v", "q"], "level_coord": "pressure_level"}},
+    {"merge_to_data": {"coord": "level", "order": ["z500", "t850", "q925"]}},
+    {"normalize": true}
   ]
 }
 ```
+
+`merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`; omit `order` to use the current variable order. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
+
+`normalize` computes per-channel `mean`/`std` (and level-scaled `weight`) from the prepared data, stores `(x - mean) / std` values in the Zarr, and writes `mean.nc` / `std.nc` / `weight.nc` next to the output Zarr. Source NaN values are preserved (for example ERA5-Land non-land pixels); the core dataset classes replace them with 0 via `torch.nan_to_num`.
+
+`flatten_step` merges the `time` and `step` dimensions of a GRIB-derived dataset into a single `time` axis using the `valid_time` coordinate, drops all-NaN combinations (for example ERA5-Land short-forecast GRIB frames outside the requested window), and reorders to `(time, level, lat, lon)`. Use it after `merge_to_data` for GRIB inputs that carry a `step` dimension.
+
+## Normalization Convention
+
+Store normalized values in Zarr: precipitation-like channels such as `tp` are log-transformed with `log1p`, other channels are scaled with `(x - mean) / std` using per-channel statistics. The companion `mean`/`std`/`weight` sidecars record those statistics. Training feeds the Zarr directly (the model forward pass does not re-normalize); evaluation, export, and inference invert the sidecars back to physical values (`inv_normalize`). The core repository states this convention explicitly: "Training datasets are normalized Zarr stores with companion mean/std/weight.npy" and "the last channel is log-transformed precipitation".
+
+## Directory Layout
+
+Keep downloaded source data, conversion products, and sidecars in separate, predictable locations so the plan stays executable and inspection is unambiguous:
+
+- Download staging: the raw files delivered by the provider (NetCDF, GRIB, ZIP archives) go to a staging directory, not into the final data directory.
+- Converted product: one Zarr store per dataset, placed at the destination recorded in the download plan.
+- Sidecars and static fields: `mean`, `std`, `weight`, `mask`, `land_mask`, `const` files live in the same directory as the Zarr store (`.nc`, `.npy`, or Zarr variables).
+- Naming: use the dataset name from the download plan (for example `s2s.1950-2024.c76`); do not mix multiple test or comparison datasets in one folder.
 
 ## Validation Config
 

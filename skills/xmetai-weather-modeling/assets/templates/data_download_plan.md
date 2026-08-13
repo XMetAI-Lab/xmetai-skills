@@ -17,6 +17,8 @@ One row per dataset and purpose, deduplicated across configs. For training, spli
 
 Time split notes (training): record the train and validation/test ranges from `train_times`/`test_times` (or training-script defaults) and note any overlap. For inference, record the inference time plus the required history window (`hist_frames`); `mean`/`std` sidecars are still required.
 
+Static field acquisition notes: ERA5 invariants come from `reanalysis-era5-single-levels` with a single time point; ERA5-Land orography/land-sea mask come from the ERA5-Land documentation attachments; sidecars are computed from the prepared dataset. The static field grid must match the training grid.
+
 ### Download & conversion (one row per dataset)
 
 Name the source dataset explicitly (CDS catalogue name or author-provided data) so the plan stays executable without re-deriving the download or conversion details.

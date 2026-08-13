@@ -19,21 +19,43 @@ Steps config (JSON or YAML):
         {"rename": {"total_cloud_cover": "clt"}},
         {"keep_vars": ["z", "t", "q"]},
         {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
-        {"resample": {"freq": "6h", "operator": "mean"}}
+        {"resample": {"freq": "6h", "operator": "mean"}},
+        {"units": {"q": 1000, "ttr": 1 / 3600}},
+        {"log1p": ["tp"]},
+        {"split_levels": {"vars": ["z", "t", "u", "v", "q"],
+                          "level_coord": "pressure_level",
+                          "levels": [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]}},
+        {"merge_to_data": {"coord": "level", "order": ["z500", "t850", "q925"]}},
+        {"normalize": true}
       ]
     }
 
-Unknown steps abort the plan. The script never writes without the guard.
+``merge_to_data`` combines data variables into a single ``data`` variable
+with the given channel coordinate (``level`` or ``channel``), matching the
+model library layout. ``split_levels`` expands a variable with a level
+dimension (for example CDS pressure levels) into one variable per level
+using ``name_template`` (default ``{var}{level}``), so it can feed
+``merge_to_data``. ``units`` multiplies variables by the given factors and
+``log1p`` applies ``log1p(clip(min=0))`` to the listed variables. GRIB inputs
+that mix GRIB editions are read per variable and merged automatically;
+cfgrib index files are not written (``indexpath=""``). ``normalize`` computes
+per-channel mean/std (and level-scaled weights) from the prepared data,
+scales the stored values with ``(x - mean) / std``, and writes
+``mean.nc`` / ``std.nc`` / ``weight.nc`` next to the output Zarr. Unknown
+steps abort the plan. The script never writes without the guard.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 try:
     import xarray as xr
@@ -55,11 +77,56 @@ def format_label(path: Path) -> str:
     return "netcdf"
 
 
+def _open_grib_by_shortnames(path: Path):
+    """Fallback for GRIB files cfgrib cannot open as a whole (for example
+    multi-variable ERA5-Land files mixing GRIB editions): read each variable
+    with ``filter_by_keys`` and merge the results."""
+    try:
+        from eccodes import codes_grib_new_from_file, codes_get, codes_release
+    except ImportError as exc:  # pragma: no cover - cfgrib depends on eccodes
+        raise RuntimeError("eccodes is unavailable for the per-variable GRIB fallback") from exc
+
+    shortnames: list[str] = []
+    with open(path, "rb") as handle:
+        while True:
+            gid = codes_grib_new_from_file(handle)
+            if gid is None:
+                break
+            try:
+                name = codes_get(gid, "shortName")
+            finally:
+                codes_release(gid)
+            if name not in shortnames:
+                shortnames.append(name)
+    if not shortnames:
+        raise RuntimeError(f"no GRIB messages found in {path}")
+
+    datasets = []
+    try:
+        for name in shortnames:
+            datasets.append(
+                xr.open_dataset(
+                    path,
+                    engine="cfgrib",
+                    backend_kwargs={"filter_by_keys": {"shortName": name}, "indexpath": ""},
+                )
+            )
+        return xr.merge(datasets, compat="override")
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
 def open_input(path: Path):
     if xr is None:
         raise SystemExit("xarray is not installed")
     if is_zarr_dir(path):
         return xr.open_zarr(path)
+    if format_label(path) == "grib":
+        try:
+            return xr.open_dataset(path, engine="cfgrib", backend_kwargs={"indexpath": ""})
+        except Exception:
+            return _open_grib_by_shortnames(path)
     return xr.open_dataset(path)
 
 
@@ -108,9 +175,137 @@ def apply_steps(ds, steps: list[dict[str, Any]]):
             if func is None:
                 raise SystemExit(f"unsupported resample operator: {operator}")
             ds = func()
+        elif "units" in step:
+            for name, factor in step["units"].items():
+                if name not in ds.data_vars:
+                    raise SystemExit(f"units: variable not found: {name}")
+                ds[name] = ds[name] * float(factor)
+        elif "log1p" in step:
+            for name in step["log1p"]:
+                if name not in ds.data_vars:
+                    raise SystemExit(f"log1p: variable not found: {name}")
+                ds[name] = np.log1p(ds[name].clip(min=0))
+        elif "split_levels" in step:
+            cfg = step["split_levels"]
+            vars_to_split = [str(v) for v in cfg.get("vars", [])]
+            level_coord = str(cfg.get("level_coord", "pressure_level"))
+            template = str(cfg.get("name_template", "{var}{level}"))
+            levels = cfg.get("levels")
+            if levels is None:
+                if level_coord not in ds.coords:
+                    raise SystemExit(f"split_levels: coordinate {level_coord!r} not found")
+                levels = [int(v) for v in ds.coords[level_coord].values]
+            new_vars = {}
+            for var in vars_to_split:
+                if var not in ds.data_vars:
+                    raise SystemExit(f"split_levels: variable not found: {var}")
+                da = ds[var]
+                if level_coord not in da.dims:
+                    raise SystemExit(f"split_levels: {var} has no {level_coord} dim")
+                for level in levels:
+                    sub = da.sel({level_coord: level}, drop=True)
+                    name = template.format(var=var, level=level)
+                    new_vars[name] = sub
+            kept = {name: ds[name] for name in ds.data_vars if name not in vars_to_split}
+            kept.update(new_vars)
+            ds = xr.Dataset(kept)
+        elif "merge_to_data" in step:
+            cfg = step["merge_to_data"]
+            coord = str(cfg.get("coord", "level"))
+            names = [str(n) for n in cfg.get("order", [])] or list(ds.data_vars)
+            if len(names) == 0:
+                raise SystemExit("merge_to_data: no variables to merge")
+            missing = [n for n in names if n not in ds.data_vars]
+            if missing:
+                raise SystemExit(f"merge_to_data: variables not found: {missing}")
+            merged = xr.concat([ds[name] for name in names], dim=coord)
+            merged = merged.assign_coords({coord: names})
+            dims = list(merged.dims)
+            if "time" in dims:
+                dims.remove("time")
+                dims.insert(0, "time")
+            if coord in dims:
+                dims.remove(coord)
+                dims.insert(1, coord)
+            ds = merged.transpose(*dims).to_dataset(name="data")
+        elif "normalize" in step:
+            pass  # handled after apply_steps in main (compute stats + write sidecars)
+        elif "flatten_step" in step:
+            if "data" not in ds.data_vars or "step" not in ds["data"].dims:
+                raise SystemExit("flatten_step requires a 'data' variable with a step dim")
+            da = ds["data"]
+            vt = ds["valid_time"] if "valid_time" in ds.coords else None
+            da = da.stack(sample=("time", "step"))
+            da = da.reset_index("sample", drop=True)
+            if vt is not None:
+                da = da.assign_coords(sample=("sample", vt.stack(sample=("time", "step")).values))
+            keep = ~np.isnan(da).all(dim=[d for d in da.dims if d != "sample"])
+            da = da.isel(sample=keep).rename(sample="time").sortby("time")
+            dims = [d for d in ("time", "level", "channel", "latitude", "longitude") if d in da.dims]
+            ds = da.transpose(*dims).to_dataset(name="data")
         else:
             raise SystemExit(f"unknown step: {list(step)}")
     return ds
+
+
+LEVEL_RE = re.compile(r"^([A-Za-z]+)_?(\d+)$")
+
+
+def compute_channel_stats(ds):
+    """Return (channel names, mean, std, channel coord) from the prepared dataset."""
+    coord = next((c for c in ("level", "channel") if c in ds.coords), "")
+    if coord and "data" in ds.data_vars:
+        names = [str(v) for v in ds.coords[coord].values]
+        da = ds["data"]
+        mean = np.empty(len(names), dtype=np.float32)
+        std = np.empty(len(names), dtype=np.float32)
+        for i, name in enumerate(names):
+            sub = da.sel({coord: name})
+            dims = [d for d in sub.dims if d != coord]
+            mean[i] = float(sub.mean(dim=dims, skipna=True).values)
+            std[i] = float(sub.std(dim=dims, skipna=True).values)
+        return names, mean, std, coord
+    names = list(ds.data_vars)
+    mean = np.empty(len(names), dtype=np.float32)
+    std = np.empty(len(names), dtype=np.float32)
+    for i, name in enumerate(names):
+        da = ds[name]
+        mean[i] = float(da.mean(skipna=True).values)
+        std[i] = float(da.std(skipna=True).values)
+    return names, mean, std, ""
+
+
+def normalize_ds(ds, mean, std, coord, names):
+    """Scale the dataset with (x - mean) / std per channel (std 0 -> 1)."""
+    safe_std = np.where(std == 0, 1.0, std)
+    if coord and "data" in ds.data_vars:
+        m = xr.DataArray(mean, dims=[coord], coords={coord: names})
+        s = xr.DataArray(safe_std, dims=[coord], coords={coord: names})
+        return ds.assign(data=(ds["data"] - m) / s)
+    for i, name in enumerate(names):
+        ds[name] = (ds[name] - mean[i]) / safe_std[i]
+    return ds
+
+
+def channel_weights(names):
+    """Level-scaled channel weights matching the core convention (max 1)."""
+    weights = np.ones(len(names), dtype=np.float32)
+    for i, name in enumerate(names):
+        match = LEVEL_RE.match(name)
+        if match is not None:
+            weights[i] = max(0.2, int(match.group(2)) / 1000.0)
+    weights /= weights.max()
+    return weights
+
+
+def write_sidecars(out_dir, names, mean, std, weight, coord_name):
+    """Write mean/std/weight.nc next to the output Zarr (core reads from data dir)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dim = coord_name or "channel"
+    for key, values in (("mean", mean), ("std", std), ("weight", weight)):
+        da = xr.DataArray(values, dims=[dim], coords={dim: names}, attrs={"long_name": key})
+        da.to_netcdf(out_dir / f"{key}.nc")
 
 
 def describe(ds) -> dict[str, Any]:
@@ -162,20 +357,28 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"input not found: {input_path}")
 
     steps = load_steps_config(args.steps_config)
+    do_normalize = any("normalize" in step for step in steps)
     try:
         ds = open_input(input_path)
     except Exception as exc:
         if format_label(input_path) == "grib":
             raise SystemExit(
                 f"GRIB decode failed: {type(exc).__name__}: {exc}\n"
-                "Hint: multi-variable ERA5-Land GRIB mixes GRIB editions and may not "
-                "decode as a whole; prefer NetCDF for multi-variable downloads or split "
-                "the GRIB by variable (see references/data-preprocessing.md)."
+                "Hint: multi-variable GRIB may mix GRIB editions; the automatic "
+                "per-variable fallback also failed. Prefer NetCDF for multi-variable "
+                "downloads or split the GRIB by variable "
+                "(see references/data-preprocessing.md)."
             ) from exc
         raise
     try:
         before = describe(ds)
         ds = apply_steps(ds, steps)
+        if do_normalize:
+            names, mean, std, coord = compute_channel_stats(ds)
+            weight = channel_weights(names)
+            ds = normalize_ds(ds, mean, std, coord, names)
+            preview = ", ".join(f"{n}={m:.3g}/{s:.3g}" for n, m, s in list(zip(names, mean, std))[:3])
+            print(f"normalize: {len(names)} channels (e.g. {preview} ...); sidecars written on --allow-write")
         after = describe(ds)
     finally:
         ds.close()
@@ -202,6 +405,12 @@ def main(argv: list[str] | None = None) -> int:
     ds = open_input(input_path)
     try:
         ds = apply_steps(ds, steps)
+        if do_normalize:
+            names, mean, std, coord = compute_channel_stats(ds)
+            weight = channel_weights(names)
+            ds = normalize_ds(ds, mean, std, coord, names)
+            write_sidecars(output_path, names, mean, std, weight, coord or "channel")
+            print(f"sidecars: mean.nc / std.nc / weight.nc -> {output_path}")
         ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-")
     finally:
         ds.close()

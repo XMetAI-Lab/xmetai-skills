@@ -54,6 +54,8 @@ def test_data_requirement_evidence_rules() -> None:
     assert "main dataset open path separately from sidecar-loading helpers" in text
     assert "Do not download" in text
     assert "Data analysis" in text
+    assert "code path wins" in text
+    assert "Normalization convention" in text
 
 
 def test_data_download_plan_template() -> None:
@@ -70,6 +72,7 @@ def test_data_download_plan_template() -> None:
     assert "### Download & conversion" in text
     assert "Train" in text
     assert "Validation / test" in text
+    assert "Static field acquisition notes" in text
     assert "## Data Source" in text
     assert "## Pending Confirmation" in text
     assert "## Next Step" in text
@@ -79,6 +82,7 @@ def test_data_download_plan_template() -> None:
     assert "evidence" in reference
     assert "inference configs" in reference
     assert "Static fields and statistics sidecars" in reference
+    assert "## Static Fields Acquisition" in reference
 
 
 def test_data_download_cds_delivery_notes() -> None:
@@ -100,6 +104,40 @@ def test_inspect_data_format_zip_hint() -> None:
     assert "zipfile" in script
     assert "container" in script
     assert "contains" in script
+
+
+def test_convert_grib_fallback_and_layout() -> None:
+    script = (SKILL / "scripts" / "convert_to_zarr.py").read_text(encoding="utf-8")
+    assert "indexpath" in script
+    assert "merge_to_data" in script
+    assert "split_levels" in script
+    assert "log1p" in script
+    assert "normalize" in script
+    assert "write_sidecars" in script
+    assert "flatten_step" in script
+    assert "shortName" in script
+    assert "filter_by_keys" in script
+    insp = (SKILL / "scripts" / "inspect_data_format.py").read_text(encoding="utf-8")
+    assert "indexpath" in insp
+    text = (SKILL / "references" / "data-preprocessing.md").read_text(encoding="utf-8")
+    assert "merge_to_data" in text
+    assert "split_levels" in text
+    assert "Normalization Convention" in text
+    assert "log-transformed" in text
+    assert "mean/std/weight.npy" in text
+    assert "Directory Layout" in text
+    assert "indexpath" in text
+    plan = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
+    assert "Print download scripts" in plan
+
+
+def test_sidecar_generation_documented() -> None:
+    script = SKILL / "scripts" / "compute_sidecars.py"
+    assert script.exists()
+    text = (SKILL / "references" / "data-preprocessing.md").read_text(encoding="utf-8")
+    assert "compute_sidecars.py" in text
+    assert "before normalization" in text
+    assert "zero variance" in text
 
 
 def test_scripts_compile() -> None:

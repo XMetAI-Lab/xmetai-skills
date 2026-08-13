@@ -120,7 +120,7 @@ def read_metadata(target: Path, fmt: str) -> dict[str, Any]:
         if fmt == "zarr":
             ds = xr.open_zarr(target)
         elif fmt == "grib":
-            ds = xr.open_dataset(target, engine="cfgrib")
+            ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
         else:
             ds = xr.open_dataset(target)
         try:

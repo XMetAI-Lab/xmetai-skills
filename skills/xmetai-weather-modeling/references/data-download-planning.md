@@ -47,6 +47,7 @@ Do not infer missing scientific requirements without evidence. Mark unresolved f
 - **Confirmed requirement**: the selected config or its executing dataset path enforces the item. Cite the enforcing file, field, or code path.
 - **Optional requirement**: the code handles the item only when present or provides a fallback when absent.
 - **Pending confirmation**: the repository does not establish the exact value, ordering, units, preprocessing rule, source, or license.
+- Docstrings, comments, and README statements are documentation evidence, not code-path evidence. When they conflict with the executing code path (for example a comment claiming data is stored normalized while the model normalizes inputs in `forward`), the code path wins. Scientific conventions such as the normalization storage convention stay `Pending confirmation` unless verified from the executing path.
 
 Do not describe optional or pending items as mandatory downloads. Variable lists used only for weighting, masking, accumulation handling, logging, or evaluation are not complete training-variable lists unless the selected config explicitly enforces them.
 
@@ -93,7 +94,8 @@ Record:
 - Spatial extent and resolution.
 - Download format, target format, and conversion step (see Format Conversion Chain).
 - Static fields and statistics sidecars expected by the config.
-- Destination directory.
+- Normalization convention: whether the dataset stores raw values (model normalizes in `forward`) or pre-normalized values, with code-path evidence; `Pending confirmation` when not verified.
+- Destination directory, following the directory layout defined in data-preprocessing.md (download staging, converted Zarr, sidecars).
 - Estimated file count and size when known.
 - Authentication method without credentials.
 - Existing-file and overwrite policy.
@@ -118,6 +120,15 @@ Rules:
 - The plan marks the chain as feasible or pending; executing the conversion belongs to Data preprocessing, not to this route.
 - CDS delivery form is dataset-specific and must not be assumed: `reanalysis-era5-land` returns a ZIP archive by default even for single-variable requests, so record `download_format: unarchived` in the request and keep unzipping as a fallback step; `reanalysis-era5-single-levels` returns a plain file by default.
 - On the current CDS backend, ERA5 requests should use `date` plus `product_type: reanalysis`; the `year`/`month`/`day` form fails with `Duplicate value for month`. Record the exact request fields so the chain stays actionable without rediscovery.
+
+## Static Fields Acquisition
+
+Static fields (orography, land-sea mask, soil type) and statistics sidecars are separate from the time-series download:
+
+- **ERA5**: request the invariant variables (`geopotential`, `land_sea_mask`, `soil_type`) from `reanalysis-era5-single-levels` with a single time point; they are time-invariant. Request them on the same grid and area as the training data.
+- **ERA5-Land**: the orography and land-sea mask are not in the CDS catalogue. Download `geo_1279l4_0.1x0.1.grib2_v4_unpack.nc` and `lsm_1279l4_0.1x0.1.grb_v4_unpack.nc` from the ERA5-Land data documentation (Parameter listings attachments). Other invariants (soil, vegetation) come from ERA5/IFS documentation or external mirrors.
+- The static field grid must match the training data grid, or be resampled to it.
+- Statistics sidecars (`mean`, `std`, `weight`) are computed from the prepared dataset, not downloaded.
 
 ## Preflight Status
 
@@ -144,6 +155,8 @@ Keep the printed plan short and readable:
 - For training, split the download rows by the config's train and validation/test time ranges; for inference, list only the inference history window and the required sidecars.
 - Name the source dataset explicitly in every download row (CDS catalogue name or author-provided data) and include the conversion step from source to target, so the plan is executable without re-deriving the download or conversion details.
 - Include static fields and statistics sidecars in the download list, with their source (separate download such as ERA5-Land invariants, or computed from the prepared dataset) and format; do not silently omit them.
+- Print download scripts and steps/config files in the response instead of writing them to the workspace; creating such files is itself a filesystem write and requires the user to ask for it explicitly.
+- Do not state unverified scientific conclusions (for example the normalization storage convention) in the bottom line or the download list; put them in Pending Confirmation unless verified from the executing code path.
 - Keep evidence and config-internal details (code paths, helper names, constants) out of the printed plan. Evidence is collected during extraction but shown only when the user asks for justification.
 - Do not print optional requirements or a preflight table as separate sections; fold "not needed" items into one line and keep pending items to those that block the download or the conversion.
 - State the recommended next step and the blocking confirmations.
