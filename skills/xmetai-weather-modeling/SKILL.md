@@ -53,7 +53,8 @@ metadata:
 - `check_onnx_io.py`: ONNX IO summary.
 - `zarr_write_guard.py`: mandatory guard for future write scripts.
 - `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr to Zarr.
-- `preprocess_validate.py`: variable/unit/time checks on prepared data.
+- `compute_sidecars.py`: per-channel mean/std/weight sidecar generation.
+- `merge_normalize.py`: merge multiple Zarr stores and normalize them as one dataset.
 - `collect_experiment_report.py`: lightweight report.
 
 ## Validation Posture

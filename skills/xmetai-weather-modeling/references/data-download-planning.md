@@ -27,7 +27,7 @@ Use **Data analysis** instead when data already exists and the task is to inspec
 Classify the entry config as training or inference first:
 
 - **Training configs** (for example `*_base.py`, `*_vit.py`, `*_lora.py`): extract the full training and validation/test coverage from `train_times`/`test_times` (or the training-script defaults) and record the split explicitly in the plan. Note overlaps when the config places the same period in both train and test.
-- **Inference configs** (for example `*_infer.py`): they reuse the base dataset contract (channels, frequency, grid) but only need the history window before each inference time. Record the inference window instead of the full training coverage; `mean`/`std` sidecars remain required, `weight` is not needed, and targets are not downloaded.
+- **Inference configs** (for example `*_infer.py`): they reuse the base dataset contract (channels, frequency, grid) but only need the history window before each inference time. Record the inference window instead of the full training coverage. The exported ONNX interface takes physical values in the current models, but the core inference wrapper may receive normalized inputs — confirm the export/inference code before preparing inference data. `mean`/`std` sidecars remain required, `weight` is not needed, and targets are not downloaded.
 
 Check:
 
@@ -47,7 +47,7 @@ Do not infer missing scientific requirements without evidence. Mark unresolved f
 - **Confirmed requirement**: the selected config or its executing dataset path enforces the item. Cite the enforcing file, field, or code path.
 - **Optional requirement**: the code handles the item only when present or provides a fallback when absent.
 - **Pending confirmation**: the repository does not establish the exact value, ordering, units, preprocessing rule, source, or license.
-- Docstrings, comments, and README statements are documentation evidence, not code-path evidence. When they conflict with the executing code path (for example a comment claiming data is stored normalized while the model normalizes inputs in `forward`), the code path wins. Scientific conventions such as the normalization storage convention stay `Pending confirmation` unless verified from the executing path.
+- Docstrings, comments, and README statements are documentation evidence, not code-path evidence. When they conflict with the executing code path (for example a comment claiming the model normalizes inputs in `forward` while it only does so in `export_onnx`), the code path wins. Scientific conventions such as the normalization storage convention stay `Pending confirmation` unless verified from the executing path.
 
 Do not describe optional or pending items as mandatory downloads. Variable lists used only for weighting, masking, accumulation handling, logging, or evaluation are not complete training-variable lists unless the selected config explicitly enforces them.
 
@@ -94,7 +94,7 @@ Record:
 - Spatial extent and resolution.
 - Download format, target format, and conversion step (see Format Conversion Chain).
 - Static fields and statistics sidecars expected by the config.
-- Normalization convention: whether the dataset stores raw values (model normalizes in `forward`) or pre-normalized values, with code-path evidence; `Pending confirmation` when not verified.
+- Normalization convention: the core convention stores normalized values in Zarr (model forward does not re-normalize); record that the prepared dataset follows it. Inference input form depends on the model's export/inference code and should be confirmed per model.
 - Destination directory, following the directory layout defined in data-preprocessing.md (download staging, converted Zarr, sidecars).
 - Estimated file count and size when known.
 - Authentication method without credentials.
@@ -129,6 +129,16 @@ Static fields (orography, land-sea mask, soil type) and statistics sidecars are 
 - **ERA5-Land**: the orography and land-sea mask are not in the CDS catalogue. Download `geo_1279l4_0.1x0.1.grib2_v4_unpack.nc` and `lsm_1279l4_0.1x0.1.grb_v4_unpack.nc` from the ERA5-Land data documentation (Parameter listings attachments). Other invariants (soil, vegetation) come from ERA5/IFS documentation or external mirrors.
 - The static field grid must match the training data grid, or be resampled to it.
 - Statistics sidecars (`mean`, `std`, `weight`) are computed from the prepared dataset, not downloaded.
+
+## Source Retrieval Guidance
+
+When a download-list item has no confirmed source, do not hard-code a dataset-specific channel. Instead:
+
+- Mark the item as source-unconfirmed in the plan.
+- Search the web for possible channels for that data (official site, CDS, GitHub, Kaggle, academic mirrors, and so on), preferring official sources.
+- Output a channel list per item, each entry naming: the channel, authority (official / mirror / community), licence and authentication requirements, expected format and approximate size, and how to obtain it (link, API, or command).
+- Stop at the channel list; do not download. The user picks a channel and runs the download, then the agent verifies the files (format detection) before conversion.
+- Mark unverified channels as pending confirmation; never claim a channel is official without checking.
 
 ## Preflight Status
 

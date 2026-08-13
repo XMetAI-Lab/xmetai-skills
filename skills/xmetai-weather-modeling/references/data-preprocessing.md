@@ -11,7 +11,7 @@ It covers:
 - Format detection: extension and magic bytes first, then metadata read.
 - Declarative conversion steps: variable rename, variable selection, time selection, resampling, channel merge.
 - Guarded conversion to Zarr.
-- Post-conversion validation: variables, units, and time continuity.
+- Post-conversion validation: hand the converted store to Data analysis, where `inspect_zarr_schema.py` describes the store and the agent judges training readiness against the model contract.
 
 It does **not**:
 
@@ -27,8 +27,10 @@ Use **Data download planning** when data is missing and only a plan is requested
 2. Derive the steps config from the download plan's format conversion chain and the selected config's contract (variables, frequency, time range).
 3. Dry-run `convert_to_zarr.py` and show the before/after plan to the user.
 4. After explicit user approval, run with `--allow-write --ack-risk I-understand-this-mutates-zarr`; the Zarr write guard executes before any mutation.
-5. Run `preprocess_validate.py --path <output>` with expected variables, units, and frequency.
-6. Report the conversion summary and the validation result. Do not report training readiness under this route.
+5. Hand the converted store to Data analysis: run `inspect_zarr_schema.py` for the store description (dims, variables, coordinates, chunks, statistics) and let the agent judge training readiness against the model contract.
+6. Report the conversion summary. Training-readiness validation belongs to Data analysis.
+
+Conversion completes data readiness for the main data: a `normalize` step writes `mean`/`std`/`weight` sidecars into the output directory. Static fields are prepared separately (download plan provides the source; `inspect_static_nc.py` checks their content) and their presence is verified by the agent at the Data analysis stage, not by the conversion script.
 
 ## Format Support
 
@@ -78,6 +80,8 @@ The write path requires the Zarr write guard and explicit approval flags. Inputs
 
 cfgrib index files (`.idx`) are not written: all GRIB reads pass `indexpath=""`. The `merge_to_data` step combines data variables into a single `data` variable with a `level`/`channel` coordinate, matching the model library layout.
 
+New CDS ERA5 downloads name the time coordinate `valid_time` instead of `time`; add a rename step (`{"rename": {"valid_time": "time"}}`) to normalize to the model library convention.
+
 ### compute_sidecars.py
 
 Compute the per-channel `mean` / `std` / `weight` sidecars for a prepared Zarr store.
@@ -90,19 +94,6 @@ python compute_sidecars.py --input out.zarr --output-dir <dir> --allow-write [--
 Writes `mean.nc` / `std.nc` / `weight.nc` (1-D per-channel NetCDF arrays); the core reader prefers `.nc` over `.npy` over Zarr variables and reshapes them per channel. `weight` follows the core convention (level-scaled, optional land/ocean corrections via `--land-names` / `--ocean-names`, normalized to a maximum of 1).
 
 Compute sidecars from the unit-converted, log-transformed data before normalization. A channel with zero variance is written as `std=0`; the core normalizer treats zero std as 1.
-
-### preprocess_validate.py
-
-Validate a prepared dataset without writing.
-
-```text
-python preprocess_validate.py --path out.zarr --config expected.json [--json]
-python preprocess_validate.py --path out.zarr --variables z,t,q --freq 6h
-```
-
-Checks: expected variables present, units match, time monotonic and continuous at the expected frequency with the requested coverage. Exit code 0 when valid, 1 when invalid.
-
-New CDS ERA5 downloads name the time coordinate `valid_time` instead of `time`. `preprocess_validate.py` accepts either name; to normalize a store to the model library convention, add a rename step (`{"rename": {"valid_time": "time"}}`) during conversion.
 
 ## Steps Config
 
@@ -126,13 +117,20 @@ JSON or YAML. Unknown steps abort the plan.
 
 `merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`; omit `order` to use the current variable order. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
 
-`normalize` computes per-channel `mean`/`std` (and level-scaled `weight`) from the prepared data, stores `(x - mean) / std` values in the Zarr, and writes `mean.nc` / `std.nc` / `weight.nc` next to the output Zarr. Source NaN values are preserved (for example ERA5-Land non-land pixels); the core dataset classes replace them with 0 via `torch.nan_to_num`.
+`normalize` computes per-channel `mean`/`std` (and level-scaled `weight`, with optional land/ocean corrections via `{"normalize": {"land_names": [...], "ocean_names": [...]}}`) from the prepared data, stores `(x - mean) / std` values in the Zarr, and writes `mean.nc` / `std.nc` / `weight.nc` next to the output Zarr. Source NaN values are preserved (for example ERA5-Land non-land pixels); the core dataset classes replace them with 0 via `torch.nan_to_num`. The same weight convention (level-scaled plus optional land/ocean) is used by `compute_sidecars.py` and `merge_normalize.py`.
 
 `flatten_step` merges the `time` and `step` dimensions of a GRIB-derived dataset into a single `time` axis using the `valid_time` coordinate, drops all-NaN combinations (for example ERA5-Land short-forecast GRIB frames outside the requested window), and reorders to `(time, level, lat, lon)`. Use it after `merge_to_data` for GRIB inputs that carry a `step` dimension.
+
+When a model dataset is built from multiple converted Zarr stores (for example 65 pressure-level channels plus 11 single-level channels), merge and normalize them as one dataset with `merge_normalize.py`: it verifies time/lat/lon alignment, concatenates the channel dimension (channel count is determined by the inputs), computes per-channel statistics over the merged data, and writes the normalized Zarr plus sidecars. Do not normalize each input store separately before merging.
 
 ## Normalization Convention
 
 Store normalized values in Zarr: precipitation-like channels such as `tp` are log-transformed with `log1p`, other channels are scaled with `(x - mean) / std` using per-channel statistics. The companion `mean`/`std`/`weight` sidecars record those statistics. Training feeds the Zarr directly (the model forward pass does not re-normalize); evaluation, export, and inference invert the sidecars back to physical values (`inv_normalize`). The core repository states this convention explicitly: "Training datasets are normalized Zarr stores with companion mean/std/weight.npy" and "the last channel is log-transformed precipitation".
+
+## Training vs Inference Data Forms
+
+- **Training** consumes a normalized Zarr store: values are stored as `(x - mean) / std` (with `tp` log-transformed first), and the model forward pass does not re-normalize.
+- **Exported ONNX** (`export_onnx` in the current ViT/Afnonet/GraphCast/GroupVAE/Puyun models): normalization and inverse normalization are baked into the exported graph, so the ONNX model interface takes physical values and returns physical values. The core inference wrapper (`onnx_infer.py`) currently receives normalized inputs in its cascade entry and converts internally. Do not assume this pattern holds for every model: check the export/inference code of the model in use before preparing inference data.
 
 ## Directory Layout
 
@@ -142,17 +140,6 @@ Keep downloaded source data, conversion products, and sidecars in separate, pred
 - Converted product: one Zarr store per dataset, placed at the destination recorded in the download plan.
 - Sidecars and static fields: `mean`, `std`, `weight`, `mask`, `land_mask`, `const` files live in the same directory as the Zarr store (`.nc`, `.npy`, or Zarr variables).
 - Naming: use the dataset name from the download plan (for example `s2s.1950-2024.c76`); do not mix multiple test or comparison datasets in one folder.
-
-## Validation Config
-
-```json
-{
-  "variables": ["z", "t", "q"],
-  "units": {"z": "m2 s-2", "t": "K"},
-  "freq": "6h",
-  "time": {"start": "2023-06-01", "end": "2023-06-03"}
-}
-```
 
 ## Boundary Rules
 

@@ -90,6 +90,8 @@ def test_data_download_cds_delivery_notes() -> None:
     assert "download_format" in text
     assert "unarchived" in text
     assert "Duplicate value for month" in text
+    assert "Source Retrieval Guidance" in text
+    assert "preferring official sources" in text
 
 
 def test_data_preprocessing_container_notes() -> None:
@@ -125,6 +127,9 @@ def test_convert_grib_fallback_and_layout() -> None:
     assert "Normalization Convention" in text
     assert "log-transformed" in text
     assert "mean/std/weight.npy" in text
+    assert "Training vs Inference Data Forms" in text
+    assert "Exported ONNX" in text
+    assert "Do not assume this pattern holds for every model" in text
     assert "Directory Layout" in text
     assert "indexpath" in text
     plan = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
@@ -134,10 +139,13 @@ def test_convert_grib_fallback_and_layout() -> None:
 def test_sidecar_generation_documented() -> None:
     script = SKILL / "scripts" / "compute_sidecars.py"
     assert script.exists()
+    assert (SKILL / "scripts" / "merge_normalize.py").exists()
     text = (SKILL / "references" / "data-preprocessing.md").read_text(encoding="utf-8")
     assert "compute_sidecars.py" in text
     assert "before normalization" in text
     assert "zero variance" in text
+    assert "Static fields are prepared separately" in text
+    assert "merge_normalize.py" in text
 
 
 def test_scripts_compile() -> None:

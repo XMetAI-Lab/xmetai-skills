@@ -287,15 +287,30 @@ def normalize_ds(ds, mean, std, coord, names):
     return ds
 
 
-def channel_weights(names):
-    """Level-scaled channel weights matching the core convention (max 1)."""
+def channel_weights(names, land=(), ocean=()):
+    """Level-scaled channel weights with optional land/ocean corrections (max 1)."""
     weights = np.ones(len(names), dtype=np.float32)
     for i, name in enumerate(names):
         match = LEVEL_RE.match(name)
         if match is not None:
             weights[i] = max(0.2, int(match.group(2)) / 1000.0)
+    for i, name in enumerate(names):
+        if name in land:
+            weights[i] *= 0.33
+        elif name in ocean:
+            weights[i] *= 0.67
     weights /= weights.max()
     return weights
+
+
+def normalize_land_ocean(steps):
+    """Extract optional land/ocean channel names from a normalize step."""
+    land, ocean = [], []
+    for step in steps:
+        if "normalize" in step and isinstance(step["normalize"], dict):
+            land = step["normalize"].get("land_names", [])
+            ocean = step["normalize"].get("ocean_names", [])
+    return land, ocean
 
 
 def write_sidecars(out_dir, names, mean, std, weight, coord_name):
@@ -375,7 +390,8 @@ def main(argv: list[str] | None = None) -> int:
         ds = apply_steps(ds, steps)
         if do_normalize:
             names, mean, std, coord = compute_channel_stats(ds)
-            weight = channel_weights(names)
+            land_names, ocean_names = normalize_land_ocean(steps)
+            weight = channel_weights(names, set(land_names), set(ocean_names))
             ds = normalize_ds(ds, mean, std, coord, names)
             preview = ", ".join(f"{n}={m:.3g}/{s:.3g}" for n, m, s in list(zip(names, mean, std))[:3])
             print(f"normalize: {len(names)} channels (e.g. {preview} ...); sidecars written on --allow-write")
@@ -407,7 +423,8 @@ def main(argv: list[str] | None = None) -> int:
         ds = apply_steps(ds, steps)
         if do_normalize:
             names, mean, std, coord = compute_channel_stats(ds)
-            weight = channel_weights(names)
+            land_names, ocean_names = normalize_land_ocean(steps)
+            weight = channel_weights(names, set(land_names), set(ocean_names))
             ds = normalize_ds(ds, mean, std, coord, names)
             write_sidecars(output_path, names, mean, std, weight, coord or "channel")
             print(f"sidecars: mean.nc / std.nc / weight.nc -> {output_path}")
