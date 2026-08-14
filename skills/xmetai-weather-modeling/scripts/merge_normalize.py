@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from convert_to_zarr import GUARD_ACK, channel_weights, compute_channel_stats, normalize_ds, write_sidecars
+from convert_to_zarr import GUARD_ACK, canonicalize_latlon, channel_weights, compute_channel_stats, normalize_ds, write_sidecars
 
 
 def open_store(path: Path):
@@ -88,17 +88,17 @@ def main(argv: list[str] | None = None) -> int:
         if not p.exists():
             raise SystemExit(f"store not found: {p}")
 
-    datasets = [open_store(p) for p in stores]
+    datasets = [canonicalize_latlon(open_store(p)) for p in stores]
     try:
         ref_time = datasets[0]["time"].values
-        ref_lat = datasets[0]["latitude"].values
-        ref_lon = datasets[0]["longitude"].values
+        ref_lat = datasets[0]["lat"].values
+        ref_lon = datasets[0]["lon"].values
         for ds in datasets[1:]:
             if not np.array_equal(ds["time"].values, ref_time):
                 raise SystemExit("stores have misaligned time axes")
-            if not np.array_equal(ds["latitude"].values, ref_lat):
+            if not np.array_equal(ds["lat"].values, ref_lat):
                 raise SystemExit("stores have misaligned latitude axes")
-            if not np.array_equal(ds["longitude"].values, ref_lon):
+            if not np.array_equal(ds["lon"].values, ref_lon):
                 raise SystemExit("stores have misaligned longitude axes")
 
         names, coord = [], None

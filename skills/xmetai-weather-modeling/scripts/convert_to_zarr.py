@@ -130,6 +130,23 @@ def open_input(path: Path):
     return xr.open_dataset(path)
 
 
+def canonicalize_latlon(ds):
+    """Rename ``latitude``/``longitude`` coordinates to ``lat``/``lon``.
+
+    Core dataset classes (``MultiZarrDataset`` bbox path, ``GraphCastDataset``)
+    access ``ds.lat`` / ``ds.lon`` directly, while CDS NetCDF/GRIB inputs carry
+    ``latitude``/``longitude``. Keeping the output Zarr coordinates as
+    ``lat``/``lon`` makes conversion products consumable without per-dataset
+    adapters.
+    """
+    rename = {}
+    if "latitude" in ds.coords:
+        rename["latitude"] = "lat"
+    if "longitude" in ds.coords:
+        rename["longitude"] = "lon"
+    return ds.rename(rename) if rename else ds
+
+
 def load_steps_config(config: str | None) -> list[dict[str, Any]]:
     if config is None:
         return []
@@ -388,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         before = describe(ds)
         ds = apply_steps(ds, steps)
+        ds = canonicalize_latlon(ds)
         if do_normalize:
             names, mean, std, coord = compute_channel_stats(ds)
             land_names, ocean_names = normalize_land_ocean(steps)
@@ -421,6 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     ds = open_input(input_path)
     try:
         ds = apply_steps(ds, steps)
+        ds = canonicalize_latlon(ds)
         if do_normalize:
             names, mean, std, coord = compute_channel_stats(ds)
             land_names, ocean_names = normalize_land_ocean(steps)
@@ -428,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
             ds = normalize_ds(ds, mean, std, coord, names)
             write_sidecars(output_path, names, mean, std, weight, coord or "channel")
             print(f"sidecars: mean.nc / std.nc / weight.nc -> {output_path}")
-        ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-")
+        ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-", consolidated=True)
     finally:
         ds.close()
     print(f"\nWROTE {output_path}")
