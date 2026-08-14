@@ -6,7 +6,7 @@
 
 ### Main table: data requirements
 
-One row per dataset and purpose, deduplicated across configs. For training, split rows by the config's train and validation/test time ranges; for inference, use the history window before the inference time. Add one row for static fields and statistics sidecars, naming their source (separate download such as ERA5-Land invariants, or computed from the prepared dataset) and format.
+One row per dataset and purpose, deduplicated across configs. For training, split rows by the config's train and validation/test time ranges; for inference, use the history window before the inference time. Add one row for static fields and statistics sidecars only when the model contract requires them (for example non-empty `maskid`/`static_fields` or required `const`); omit the static-field row when the model does not need it. Statistics sidecars (`mean`/`std`/`weight`) are always required for Zarr grid models.
 
 | Purpose | Dataset | Variables / channels | Frequency | Time range | Grid | Est. size |
 |---|---|---|---|---|---|---|

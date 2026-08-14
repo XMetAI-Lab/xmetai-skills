@@ -69,6 +69,7 @@ def test_data_download_plan_template() -> None:
     assert "Source dataset" in text
     assert "Conversion step" in text
     assert "Static fields / sidecars" in text
+    assert "only when the model contract requires" in text
     assert "### Download & conversion" in text
     assert "Train" in text
     assert "Validation / test" in text
