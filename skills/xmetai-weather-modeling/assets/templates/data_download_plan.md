@@ -27,6 +27,8 @@ Name the source dataset explicitly (CDS catalogue name or author-provided data) 
 |---|---|---|---|
 | | | | |
 
+Precipitation unit note: record the source's original unit and accumulation window for every precipitation variable, plus the conversion factor to **mm accumulated values**. ERA5/ERA5-Land deliver `tp` in metres (step-accumulated, ×1000); rate forms (`kg m-2 s-1`, `mm/h`, `mm/s`) are multiplied by the accumulation length in seconds; the target window follows the model contract (for example daily totals for S2S, 6-hourly for IWC).
+
 ## Data Source
 
 - Provider / dataset name / acquisition method:

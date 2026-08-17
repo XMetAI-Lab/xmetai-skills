@@ -20,7 +20,7 @@ Steps config (JSON or YAML):
         {"keep_vars": ["z", "t", "q"]},
         {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
         {"resample": {"freq": "6h", "operator": "mean"}},
-        {"units": {"q": 1000, "ttr": 1 / 3600}},
+        {"units": {"q": 1000, "tp": 1000, "ttr": 1 / 3600}},
         {"log1p": ["tp"]},
         {"split_levels": {"vars": ["z", "t", "u", "v", "q"],
                           "level_coord": "pressure_level",
@@ -43,6 +43,14 @@ per-channel mean/std (and level-scaled weights) from the prepared data,
 scales the stored values with ``(x - mean) / std``, and writes
 ``mean.nc`` / ``std.nc`` / ``weight.nc`` next to the output Zarr. Unknown
 steps abort the plan. The script never writes without the guard.
+
+Precipitation unit convention: precipitation channels are normalized to
+**mm accumulated values** before ``log1p``/``normalize``. ERA5 and ERA5-Land
+deliver ``tp`` in metres (step-accumulated), so the steps config multiplies
+it by 1000 (``"tp": 1000``); rate-form precipitation (``kg m-2 s-1`` or
+``mm/h`` averages) must first be multiplied by the accumulation length in
+seconds. The accumulation window must follow the selected model contract
+(for example daily totals for S2S, 6-hourly for IWC).
 """
 
 from __future__ import annotations

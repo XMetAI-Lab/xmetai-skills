@@ -106,7 +106,7 @@ JSON or YAML. Unknown steps abort the plan.
     {"keep_vars": ["z", "t", "q"]},
     {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
     {"resample": {"freq": "6h", "operator": "mean"}},
-    {"units": {"q": 1000, "ttr": 1 / 3600}},
+    {"units": {"q": 1000, "tp": 1000, "ttr": 1 / 3600}},
     {"log1p": ["tp"]},
     {"split_levels": {"vars": ["z", "t", "u", "v", "q"], "level_coord": "pressure_level"}},
     {"merge_to_data": {"coord": "level", "order": ["z500", "t850", "q925"]}},
@@ -115,7 +115,9 @@ JSON or YAML. Unknown steps abort the plan.
 }
 ```
 
-`merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`; omit `order` to use the current variable order. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
+`merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`; omit `order` to use the current variable order. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `tp` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
+
+Precipitation unit convention: precipitation channels are normalized to **mm accumulated values** before `log1p`/`normalize`. ERA5 and ERA5-Land deliver `tp` in metres (step-accumulated), so the steps config multiplies it by 1000 (`"tp": 1000`); rate-form precipitation (`kg m-2 s-1`, `mm/h` averages, or `mm/s`) must first be multiplied by the accumulation length in seconds. The accumulation window must follow the selected model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models) and must be recorded in the download plan so a given data source's original unit and window can be verified.
 
 Output Zarr stores always use `lat`/`lon` as the grid coordinate names; CDS inputs carrying `latitude`/`longitude` are renamed automatically. This matches the core dataset classes, which access `ds.lat`/`ds.lon` directly (for example `GraphCastDataset` and the `MultiZarrDataset` bbox path).
 
@@ -127,7 +129,7 @@ When a model dataset is built from multiple converted Zarr stores (for example 6
 
 ## Normalization Convention
 
-Store normalized values in Zarr: precipitation-like channels such as `tp` are log-transformed with `log1p`, other channels are scaled with `(x - mean) / std` using per-channel statistics. The companion `mean`/`std`/`weight` sidecars record those statistics. Training feeds the Zarr directly (the model forward pass does not re-normalize); evaluation, export, and inference invert the sidecars back to physical values (`inv_normalize`). The core repository states this convention explicitly: "Training datasets are normalized Zarr stores with companion mean/std/weight.npy" and "the last channel is log-transformed precipitation".
+Store normalized values in Zarr: precipitation-like channels such as `tp` are first converted to **mm accumulated values**, then log-transformed with `log1p` (clip min 0, consistent with the core reader's `clamp(0, 7)` in `data_util.unnormalize`); other channels are scaled with `(x - mean) / std` using per-channel statistics. The companion `mean`/`std`/`weight` sidecars record those statistics. Training feeds the Zarr directly (the model forward pass does not re-normalize); evaluation, export, and inference invert the sidecars back to physical values (`inv_normalize`). The core repository states this convention explicitly: "Training datasets are normalized Zarr stores with companion mean/std/weight.npy" and "the last channel is log-transformed precipitation".
 
 ## Training vs Inference Data Forms
 

@@ -94,7 +94,7 @@ Record:
 - Spatial extent and resolution.
 - Download format, target format, and conversion step (see Format Conversion Chain).
 - Static fields and statistics sidecars expected by the config.
-- Normalization convention: the core convention stores normalized values in Zarr (model forward does not re-normalize); record that the prepared dataset follows it. Inference input form depends on the model's export/inference code and should be confirmed per model.
+- Normalization convention: the core convention stores normalized values in Zarr (model forward does not re-normalize); record that the prepared dataset follows it. Precipitation channels use **mm accumulated values** (see Format Conversion Chain). Inference input form depends on the model's export/inference code and should be confirmed per model.
 - Destination directory, following the directory layout defined in data-preprocessing.md (download staging, converted Zarr, sidecars).
 - Estimated file count and size when known.
 - Authentication method without credentials.
@@ -120,6 +120,7 @@ Rules:
 - The plan marks the chain as feasible or pending; executing the conversion belongs to Data preprocessing, not to this route.
 - CDS delivery form is dataset-specific and must not be assumed: `reanalysis-era5-land` returns a ZIP archive by default even for single-variable requests, so record `download_format: unarchived` in the request and keep unzipping as a fallback step; `reanalysis-era5-single-levels` returns a plain file by default.
 - On the current CDS backend, ERA5 requests should use `date` plus `product_type: reanalysis`; the `year`/`month`/`day` form fails with `Duplicate value for month`. Record the exact request fields so the chain stays actionable without rediscovery.
+- Precipitation channels are normalized to **mm accumulated values** regardless of source. Sources differ: ERA5/ERA5-Land deliver `tp` in metres (step-accumulated, ×1000 for mm), some products deliver rates (`kg m-2 s-1`, `mm/h`, `mm/s`, needing × accumulation seconds), and others already deliver mm accumulations with a specific window. Record the source's original unit and window for every precipitation variable, the conversion factor, and the target accumulation window from the model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models).
 
 ## Static Fields Acquisition
 
