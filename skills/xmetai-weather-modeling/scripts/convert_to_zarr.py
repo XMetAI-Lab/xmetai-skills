@@ -453,9 +453,10 @@ def main(argv: list[str] | None = None) -> int:
             land_names, ocean_names = normalize_land_ocean(steps)
             weight = channel_weights(names, set(land_names), set(ocean_names))
             ds = normalize_ds(ds, mean, std, coord, names)
+        ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-", consolidated=True)
+        if do_normalize:
             write_sidecars(output_path, names, mean, std, weight, coord or "channel")
             print(f"sidecars: mean.nc / std.nc / weight.nc -> {output_path}")
-        ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-", consolidated=True)
     finally:
         ds.close()
     print(f"\nWROTE {output_path}")

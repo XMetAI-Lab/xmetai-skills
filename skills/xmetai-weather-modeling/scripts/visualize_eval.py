@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Visualize offline evaluation of ``pred_*.nc`` / ``obs_*.nc`` forecast files.
+
+Reads the same paired forecast files as ``evaluate_pred.py`` and renders:
+
+- ``compare_<channel>_lead<NN>.png``: three-panel maps (prediction, observation,
+  error) for each requested channel and lead, based on the first init date.
+- ``compare_<channel>_leads.gif``: the same frames animated over leads (with
+  ``--gif``), core-style.
+- ``rmse_curves.png``: per-channel RMSE vs forecast lead.
+- ``ts_curves.png``: Threat Score vs forecast lead, one line per threshold.
+- ``threshold_metrics.png``: TS/POD/FAR vs threshold, one line per lead.
+
+Usage:
+
+    python visualize_eval.py --pred-dir path/to/pred --output-dir figs
+    python visualize_eval.py --pred-dir path/to/pred --output-dir figs --channels z500,tp
+    python visualize_eval.py --pred-dir path/to/pred --output-dir figs --gif
+
+Read-only: never writes prediction or observation data, only the figure files.
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "mplcache"))
+os.environ.setdefault("CARTOPY_DATA_DIR", str(Path(tempfile.gettempdir()) / "cartopy_data"))
+import matplotlib  # noqa: E402
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import xarray as xr  # noqa: E402
+import cartopy.crs as ccrs  # noqa: E402
+import cartopy.feature as cfeature  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from evaluate_pred import compute_all_metrics, load_pair, scan_dir  # noqa: E402
+
+if "PROJ_DATA" not in os.environ:
+    try:
+        import pyproj
+
+        os.environ["PROJ_DATA"] = pyproj.datadir.get_data_dir()
+    except Exception:
+        pass
+
+CMAP_BY_VAR = {
+    "sst": "RdYlBu_r",
+    "t2m": "RdYlBu_r",
+    "msl": "viridis",
+    "z500": "viridis",
+    "u200": "RdBu_r",
+    "u850": "RdBu_r",
+    "ttr": "magma",
+    "tp": "Blues",
+}
+
+
+def prepare_grid(lon: np.ndarray, lat: np.ndarray, field: np.ndarray):
+    """Convert 0..360 lon to -180..180 and sort, matching the pred file convention."""
+    lon = np.asarray(lon, dtype=float)
+    lat = np.asarray(lat, dtype=float)
+    field = np.asarray(field, dtype=float)
+    if lon.max() > 180:
+        if lon.size > 1 and np.isclose(lon[-1], 360.0):
+            lon = lon[:-1]
+            field = field[..., :-1]
+        lon = ((lon + 180.0) % 360.0) - 180.0
+        order = np.argsort(lon)
+        lon = lon[order]
+        field = field[..., order]
+    return lon, lat, field
+
+
+def render_map(ax, field, lat, lon, title: str, cmap: str, vmin: float, vmax: float):
+    lon, lat, field = prepare_grid(lon, lat, field)
+    ax.set_global()
+    ax.add_feature(cfeature.OCEAN.with_scale("110m"), facecolor="#d7e9f7", zorder=0)
+    ax.add_feature(cfeature.LAND.with_scale("110m"), facecolor="#f2efe9", edgecolor="none", zorder=1)
+    ax.coastlines(linewidth=0.5, resolution="110m", zorder=2)
+    gl = ax.gridlines(draw_labels=True, linewidth=0.3, color="gray", alpha=0.5, linestyle="--")
+    gl.top_labels = False
+    gl.right_labels = False
+    mesh = ax.pcolormesh(
+        lon,
+        lat,
+        field,
+        transform=ccrs.PlateCarree(),
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        shading="auto",
+        rasterized=True,
+    )
+    ax.set_title(title, fontsize=10)
+    return mesh
+
+
+def robust_limits(field: np.ndarray):
+    values = field[np.isfinite(field)]
+    if values.size == 0:
+        return 0.0, 1.0
+    low = float(np.percentile(values, 2))
+    high = float(np.percentile(values, 98))
+    if low == high:
+        high = low + 1e-6
+    return low, high
+
+
+def render_compare_frame(channel: str, lead: int, pred, obs, levels, lat, lon, lead_times):
+    """Render one three-panel compare figure (prediction / observation / error)."""
+    c = levels.index(channel)
+    cmap = CMAP_BY_VAR.get(channel, "viridis")
+    err = pred[lead, c] - obs[lead, c]
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4), subplot_kw={"projection": ccrs.PlateCarree()})
+    p_lo, p_hi = robust_limits(pred[lead, c])
+    e_lim = float(np.nanmax(np.abs(err))) if np.any(np.isfinite(err)) else 1.0
+    for ax, field, title, cm, lo, hi in (
+        (axes[0], pred[lead, c], f"Prediction | lead {lead + 1}", cmap, p_lo, p_hi),
+        (axes[1], obs[lead, c], "Observation", cmap, p_lo, p_hi),
+        (axes[2], err, "Error (pred - obs)", "RdBu_r", -e_lim, e_lim),
+    ):
+        mesh = render_map(ax, field, lat, lon, title, cm, lo, hi)
+        fig.colorbar(mesh, ax=ax, orientation="vertical", fraction=0.035, pad=0.02, shrink=0.8)
+    fig.suptitle(f"{channel} | init {lead_times[0]}", fontsize=12)
+    # Fixed layout so every frame has identical subplot geometry (GIF stability).
+    fig.subplots_adjust(left=0.03, right=0.99, top=0.86, bottom=0.10, wspace=0.28)
+    return fig
+
+
+def figure_to_pil(fig, dpi: int = 120, tight: bool = True) -> Image.Image:
+    """Render a matplotlib figure to a palette-mode PIL image (GIF frame)."""
+    buf = io.BytesIO()
+    kwargs: dict = {"format": "png", "dpi": dpi, "facecolor": "white"}
+    if tight:
+        kwargs["bbox_inches"] = "tight"
+    fig.savefig(buf, **kwargs)
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE)
+
+
+def save_compare_gif(channel: str, pred, obs, levels, lat, lon, lead_times, output_dir: Path, duration_ms: int) -> None:
+    """Animate the three-panel compare frames over leads, core-style GIF."""
+    frames = [
+        figure_to_pil(render_compare_frame(channel, lead, pred, obs, levels, lat, lon, lead_times), tight=False)
+        for lead in range(pred.shape[0])
+    ]
+    out = output_dir / f"compare_{channel}_leads.gif"
+    frames[0].save(
+        out,
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=False,
+    )
+    print(f"WROTE {out} ({len(frames)} frames)")
+
+
+def plot_compare(first_pair, channels: list[str], output_dir: Path, gif: bool, gif_duration_ms: int) -> None:
+    pred_path, obs_path = first_pair
+    with xr.open_dataset(pred_path) as ds:
+        levels = [str(v) for v in ds["level"].values]
+        lat = np.asarray(ds["lat"].values, dtype=float)
+        lon = np.asarray(ds["lon"].values, dtype=float)
+        lead_times = [np.datetime64(t).astype("datetime64[D]").astype(str) for t in ds["time"].values]
+    pred, obs, _ = load_pair(pred_path, obs_path)
+
+    for channel in channels:
+        if channel not in levels:
+            print(f"warning: channel {channel!r} not in {levels}; skipped", file=sys.stderr)
+            continue
+        for lead in range(pred.shape[0]):
+            fig = render_compare_frame(channel, lead, pred, obs, levels, lat, lon, lead_times)
+            out = output_dir / f"compare_{channel}_lead{lead + 1:02d}.png"
+            fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+            plt.close(fig)
+            print(f"WROTE {out}")
+        if gif:
+            save_compare_gif(channel, pred, obs, levels, lat, lon, lead_times, output_dir, gif_duration_ms)
+
+
+def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float], output_dir: Path) -> None:
+    leads = list(range(1, report["n_leads"] + 1))
+
+    if "rmse" in metrics:
+        levels = report["levels"]
+        cols = 3
+        rows = int(np.ceil(len(levels) / cols))
+        fig, axes = plt.subplots(rows, cols, figsize=(12, 3 * rows), squeeze=False)
+        for idx, level in enumerate(levels):
+            ax = axes[idx // cols][idx % cols]
+            ax.plot(leads, report["rmse_per_level"][level], marker="o", ms=3)
+            ax.set_title(level, fontsize=10)
+            ax.set_xlabel("lead")
+            ax.grid(alpha=0.3)
+        for idx in range(len(levels), rows * cols):
+            axes[idx // cols][idx % cols].axis("off")
+        fig.suptitle("RMSE per channel", fontsize=13)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+        out = output_dir / "rmse_curves.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"WROTE {out}")
+
+    if "ts" in metrics and report.get("threshold_metrics"):
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        for t in thresholds:
+            key = str(t)
+            ax.plot(leads, report["threshold_metrics"][key]["ts"], marker="o", ms=3, label=f">= {t}")
+        ax.set_xlabel("lead")
+        ax.set_ylabel("TS")
+        ax.set_title(f"Threat Score ({report['channel']})")
+        ax.grid(alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        out = output_dir / "ts_curves.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"WROTE {out}")
+
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        tm = report["threshold_metrics"]
+        for metric, style in (("ts", "-o"), ("pod", "-s"), ("far", "-^")):
+            for lead in range(report["n_leads"]):
+                values = [tm[str(t)][metric][lead] for t in thresholds]
+                label = f"{metric} lead {lead + 1}" if lead == 0 else None
+                ax.plot(thresholds, values, style, ms=3, label=label)
+        ax.set_xscale("log")
+        ax.set_xlabel("threshold (physical unit)")
+        ax.set_ylabel("score")
+        ax.set_title(f"Threshold metrics ({report['channel']})")
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        out = output_dir / "threshold_metrics.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"WROTE {out}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--pred-dir", required=True, help="directory containing pred_*.nc / obs_*.nc pairs")
+    parser.add_argument("--output-dir", default="eval_figures", help="directory for output figures")
+    parser.add_argument("--channels", default="z500,tp", help="comma-separated channels for compare/error maps")
+    parser.add_argument("--metrics", default="rmse,ts", help="comma-separated metrics for curves: rmse, ts, pod, far, fb")
+    parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel's physical unit")
+    parser.add_argument("--channel", default="tp", help="channel for threshold metrics")
+    parser.add_argument("--neighborhood", type=int, default=1, help="odd neighborhood size for threshold metrics (1 = pointwise)")
+    parser.add_argument("--gif", action="store_true", help="also animate compare frames over leads as GIFs")
+    parser.add_argument("--gif-duration-ms", type=int, default=500, help="GIF frame duration in milliseconds")
+    args = parser.parse_args(argv)
+
+    directory = Path(args.pred_dir).expanduser()
+    if not directory.is_dir():
+        raise SystemExit(f"pred dir not found: {directory}")
+    output_dir = Path(args.output_dir).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    channels = [c.strip() for c in args.channels.split(",") if c.strip()]
+    metrics = [m.strip().lower() for m in args.metrics.split(",") if m.strip()]
+    thresholds = [float(v) for v in args.thresholds.split(",") if v.strip()]
+
+    pairs = scan_dir(directory)
+    report = compute_all_metrics(pairs, metrics, thresholds, args.channel, args.neighborhood)
+    plot_compare(pairs[0], channels, output_dir, args.gif, args.gif_duration_ms)
+    plot_metric_curves(report, metrics, thresholds, output_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

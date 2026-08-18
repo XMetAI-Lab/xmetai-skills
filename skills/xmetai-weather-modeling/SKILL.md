@@ -29,6 +29,7 @@ metadata:
 
 - Model development: `references/model-contracts.md`
 - Evaluation and inference: `references/inference-export-deploy.md`
+- Evaluation planning (offline metrics, pred/obs contract, visualization): `references/evaluation-planning.md`
 - Data analysis: `references/zarr-static-contracts.md`
 - Data download planning: `references/data-download-planning.md`
 - Data preprocessing: `references/data-preprocessing.md`
@@ -55,8 +56,11 @@ metadata:
 - `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr to Zarr.
 - `compute_sidecars.py`: per-channel mean/std/weight sidecar generation.
 - `merge_normalize.py`: merge multiple Zarr stores and normalize them as one dataset.
+- `evaluate_pred.py`: offline RMSE / threshold metrics (TS, POD, FAR, FB) from `pred_*.nc` / `obs_*.nc`.
+- `visualize_eval.py`: map compare/error panels, RMSE/TS curves, threshold metric plots.
 - `collect_experiment_report.py`: lightweight report.
 
 ## Validation Posture
 
 Use the narrowest meaningful validation: config load/contract check, focused unit test, read-only data schema/sample, ONNX IO check, or line-by-line tensor trace.
+

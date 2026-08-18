@@ -152,11 +152,11 @@ def main(argv: list[str] | None = None) -> int:
         land = {n.strip() for n in args.land_names.split(",") if n.strip()}
         ocean = {n.strip() for n in args.ocean_names.split(",") if n.strip()}
         weight = channel_weights(names, land, ocean)
-        write_sidecars(output, names, mean, std, weight, coord)
         merged = merged.load()  # force in-memory arrays to avoid dask multi-thread zarr writes on Windows
         merged["data"].encoding.pop("chunks", None)
         merged["data"].encoding["chunks"] = tuple(merged.sizes[d] for d in merged["data"].dims)
         merged.to_zarr(str(output), mode="w" if args.overwrite else "w-", consolidated=True, safe_chunks=False)
+        write_sidecars(output, names, mean, std, weight, coord)
         print(f"sidecars: mean.nc / std.nc / weight.nc -> {output}")
         print(f"WROTE {output}")
         return 0
