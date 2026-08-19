@@ -144,6 +144,65 @@ The offline evaluation scripts have been aligned with core's metric computation:
 - **Core**: Accumulates raw counts (hit, false_alarm, miss) per frame_index, then computes final scores from aggregated counts.
 - **Offline script**: Now accumulates raw counts across all init dates before computing TS/POD/FAR/FB, matching core's aggregation logic.
 
+## Visualization Modes (Updated 2026-08-18)
+
+The ``--mode`` parameter controls the output layout:
+
+| Mode | Output | Use Case |
+|------|--------|----------|
+| ``compare`` (default) | 3-panel: Prediction / Observation / Error | Full comparison |
+| ``pred-obs`` | 2-panel: Prediction / Observation | Quick visual comparison |
+| ``pred`` | 1-panel: Prediction only | Single variable inspection |
+
+Examples:
+
+.. code-block:: bash
+
+    # Single prediction map for precipitation
+    python visualize_eval.py --pred-dir path/to/pred --channels tp --mode pred
+
+    # Prediction vs observation for z500
+    python visualize_eval.py --pred-dir path/to/pred --channels z500 --mode pred-obs
+
+Output file naming:
+
+- ``compare_tp_lead01.png`` (compare mode)
+- ``pred-obs_tp_lead01.png`` (pred-obs mode)
+- ``pred_tp_lead01.png`` (pred mode)
+
+## Region Cropping (Updated 2026-08-18)
+
+The ``--region`` parameter supports regional visualization:
+
+- **Direct coordinates**: ``--region lon_min,lon_max,lat_min,lat_max`` (cartopy convention)
+- **Region name**: The LLM resolves region names to coordinates before calling the script
+
+Common region coordinates:
+
+| Region | Coordinates (lon_min,lon_max,lat_min,lat_max) |
+|--------|----------------------------------------------|
+| China | ``70,137,17,55`` |
+| East China | ``113,125,21.5,38.5`` |
+| North China | ``97,126.5,34,54`` |
+| South China | ``104,118.5,18,26.5`` |
+| Japan | ``129,146,31,45`` |
+| Korea | ``124,132,33,43`` |
+
+When the user requests a region by name (e.g., "show me East China"), the LLM
+determines the appropriate coordinates and passes them to the script.
+
+## Frequency-Aware Labeling (Updated 2026-08-18)
+
+Both evaluation scripts support `--freq` to specify the forecast frequency in hours:
+
+- `--freq 24` (default): S2S/Land daily forecasts. Labels: `D1`, `D2`, `Day 1`, `Day 2`
+- `--freq 6`: IWC 6-hourly forecasts. Labels: `6h`, `12h`, `18h`
+
+This affects:
+- Table column headers in `evaluate_pred.py`
+- X-axis labels in `visualize_eval.py` curves
+- Frame titles in compare maps and GIFs
+
 ## Pending Confirmations
 
 - Multi-member (ensemble) output: `test()` calls `squeeze()`, which drops
@@ -151,4 +210,6 @@ The offline evaluation scripts have been aligned with core's metric computation:
   uses `members > 1`) has not been verified on real inference.
 - Physical units per channel follow `visualize_pred_gif.py`'s `VAR_META`
   (e.g. msl in Pa, tp in m, t2m in K); verify before publishing results.
+
+
 

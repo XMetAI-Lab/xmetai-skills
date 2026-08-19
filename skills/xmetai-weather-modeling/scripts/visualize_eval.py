@@ -41,7 +41,14 @@ import cartopy.crs as ccrs  # noqa: E402
 import cartopy.feature as cfeature  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from evaluate_pred import compute_all_metrics, load_pair, scan_dir  # noqa: E402
+from evaluate_pred import compute_all_metrics, load_pair, scan_dir
+
+
+def lead_label(index: int, freq: int) -> str:
+    if freq >= 24:
+        return f"Day {index + 1}"
+    return f"{freq * (index + 1)}h"
+  # noqa: E402
 
 if "PROJ_DATA" not in os.environ:
     try:
@@ -79,9 +86,12 @@ def prepare_grid(lon: np.ndarray, lat: np.ndarray, field: np.ndarray):
     return lon, lat, field
 
 
-def render_map(ax, field, lat, lon, title: str, cmap: str, vmin: float, vmax: float):
+def render_map(ax, field, lat, lon, title: str, cmap: str, vmin: float, vmax: float, extent=None):
     lon, lat, field = prepare_grid(lon, lat, field)
-    ax.set_global()
+    if extent:
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+    else:
+        ax.set_global()
     ax.add_feature(cfeature.OCEAN.with_scale("110m"), facecolor="#d7e9f7", zorder=0)
     ax.add_feature(cfeature.LAND.with_scale("110m"), facecolor="#f2efe9", edgecolor="none", zorder=1)
     ax.coastlines(linewidth=0.5, resolution="110m", zorder=2)
@@ -114,25 +124,46 @@ def robust_limits(field: np.ndarray):
     return low, high
 
 
-def render_compare_frame(channel: str, lead: int, pred, obs, levels, lat, lon, lead_times):
-    """Render one three-panel compare figure (prediction / observation / error)."""
+def render_compare_frame(channel: str, lead: int, pred, obs, levels, lat, lon, lead_times, freq: int = 24, extent=None, mode: str = "compare"):
+    """Render compare figure based on mode: compare (3-panel), pred-obs (2-panel), pred (1-panel)."""
     c = levels.index(channel)
     cmap = CMAP_BY_VAR.get(channel, "viridis")
-    err = pred[lead, c] - obs[lead, c]
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4), subplot_kw={"projection": ccrs.PlateCarree()})
     p_lo, p_hi = robust_limits(pred[lead, c])
-    e_lim = float(np.nanmax(np.abs(err))) if np.any(np.isfinite(err)) else 1.0
-    for ax, field, title, cm, lo, hi in (
-        (axes[0], pred[lead, c], f"Prediction | lead {lead + 1}", cmap, p_lo, p_hi),
-        (axes[1], obs[lead, c], "Observation", cmap, p_lo, p_hi),
-        (axes[2], err, "Error (pred - obs)", "RdBu_r", -e_lim, e_lim),
-    ):
-        mesh = render_map(ax, field, lat, lon, title, cm, lo, hi)
+
+    if mode == "pred":
+        fig, ax = plt.subplots(1, 1, figsize=(5, 4.4), subplot_kw={"projection": ccrs.PlateCarree()})
+        mesh = render_map(ax, pred[lead, c], lat, lon, f"Prediction | {lead_label(lead, freq)}", cmap, p_lo, p_hi, extent)
         fig.colorbar(mesh, ax=ax, orientation="vertical", fraction=0.035, pad=0.02, shrink=0.8)
-    fig.suptitle(f"{channel} | init {lead_times[0]}", fontsize=12)
-    # Fixed layout so every frame has identical subplot geometry (GIF stability).
-    fig.subplots_adjust(left=0.03, right=0.99, top=0.86, bottom=0.10, wspace=0.28)
-    return fig
+        fig.suptitle(f"{channel} | init {lead_times[0]}", fontsize=12)
+        fig.subplots_adjust(left=0.05, right=0.95, top=0.88, bottom=0.10)
+        return fig
+
+    elif mode == "pred-obs":
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), subplot_kw={"projection": ccrs.PlateCarree()})
+        for ax, field, title in (
+            (axes[0], pred[lead, c], f"Prediction | {lead_label(lead, freq)}"),
+            (axes[1], obs[lead, c], "Observation"),
+        ):
+            mesh = render_map(ax, field, lat, lon, title, cmap, p_lo, p_hi, extent)
+            fig.colorbar(mesh, ax=ax, orientation="vertical", fraction=0.035, pad=0.02, shrink=0.8)
+        fig.suptitle(f"{channel} | init {lead_times[0]}", fontsize=12)
+        fig.subplots_adjust(left=0.03, right=0.99, top=0.86, bottom=0.10, wspace=0.28)
+        return fig
+
+    else:  # compare (default 3-panel)
+        err = pred[lead, c] - obs[lead, c]
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.4), subplot_kw={"projection": ccrs.PlateCarree()})
+        e_lim = float(np.nanmax(np.abs(err))) if np.any(np.isfinite(err)) else 1.0
+        for ax, field, title, cm, lo, hi in (
+            (axes[0], pred[lead, c], f"Prediction | {lead_label(lead, freq)}", cmap, p_lo, p_hi),
+            (axes[1], obs[lead, c], "Observation", cmap, p_lo, p_hi),
+            (axes[2], err, "Error (pred - obs)", "RdBu_r", -e_lim, e_lim),
+        ):
+            mesh = render_map(ax, field, lat, lon, title, cm, lo, hi, extent)
+            fig.colorbar(mesh, ax=ax, orientation="vertical", fraction=0.035, pad=0.02, shrink=0.8)
+        fig.suptitle(f"{channel} | init {lead_times[0]}", fontsize=12)
+        fig.subplots_adjust(left=0.03, right=0.99, top=0.86, bottom=0.10, wspace=0.28)
+        return fig
 
 
 def figure_to_pil(fig, dpi: int = 120, tight: bool = True) -> Image.Image:
@@ -147,10 +178,10 @@ def figure_to_pil(fig, dpi: int = 120, tight: bool = True) -> Image.Image:
     return Image.open(buf).convert("P", palette=Image.Palette.ADAPTIVE)
 
 
-def save_compare_gif(channel: str, pred, obs, levels, lat, lon, lead_times, output_dir: Path, duration_ms: int) -> None:
+def save_compare_gif(channel: str, pred, obs, levels, lat, lon, lead_times, output_dir: Path, duration_ms: int, freq: int = 24, extent=None, mode: str = "compare") -> None:
     """Animate the three-panel compare frames over leads, core-style GIF."""
     frames = [
-        figure_to_pil(render_compare_frame(channel, lead, pred, obs, levels, lat, lon, lead_times), tight=False)
+        figure_to_pil(render_compare_frame(channel, lead, pred, obs, levels, lat, lon, lead_times, freq, extent, mode), tight=False)
         for lead in range(pred.shape[0])
     ]
     out = output_dir / f"compare_{channel}_leads.gif"
@@ -165,7 +196,7 @@ def save_compare_gif(channel: str, pred, obs, levels, lat, lon, lead_times, outp
     print(f"WROTE {out} ({len(frames)} frames)")
 
 
-def plot_compare(first_pair, channels: list[str], output_dir: Path, gif: bool, gif_duration_ms: int) -> None:
+def plot_compare(first_pair, channels: list[str], output_dir: Path, gif: bool, gif_duration_ms: int, freq: int = 24, extent=None, mode: str = "compare") -> None:
     pred_path, obs_path = first_pair
     with xr.open_dataset(pred_path) as ds:
         levels = [str(v) for v in ds["level"].values]
@@ -179,17 +210,19 @@ def plot_compare(first_pair, channels: list[str], output_dir: Path, gif: bool, g
             print(f"warning: channel {channel!r} not in {levels}; skipped", file=sys.stderr)
             continue
         for lead in range(pred.shape[0]):
-            fig = render_compare_frame(channel, lead, pred, obs, levels, lat, lon, lead_times)
-            out = output_dir / f"compare_{channel}_lead{lead + 1:02d}.png"
+            fig = render_compare_frame(channel, lead, pred, obs, levels, lat, lon, lead_times, freq, extent, mode)
+            prefix = mode if mode != "compare" else "compare"
+            out = output_dir / f"{prefix}_{channel}_lead{lead + 1:02d}.png"
             fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
             plt.close(fig)
             print(f"WROTE {out}")
         if gif:
-            save_compare_gif(channel, pred, obs, levels, lat, lon, lead_times, output_dir, gif_duration_ms)
+            save_compare_gif(channel, pred, obs, levels, lat, lon, lead_times, output_dir, gif_duration_ms, freq, extent, mode)
 
 
-def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float], output_dir: Path) -> None:
+def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float], output_dir: Path, freq: int = 24) -> None:
     leads = list(range(1, report["n_leads"] + 1))
+    lead_labels = [lead_label(l - 1, freq) for l in leads]
 
     if "rmse" in metrics:
         levels = report["levels"]
@@ -200,7 +233,9 @@ def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float]
             ax = axes[idx // cols][idx % cols]
             ax.plot(leads, report["rmse_per_level"][level], marker="o", ms=3)
             ax.set_title(level, fontsize=10)
-            ax.set_xlabel("lead")
+            ax.set_xlabel("lead time")
+            ax.set_xticks(leads)
+            ax.set_xticklabels(lead_labels, fontsize=7, rotation=45 if freq < 24 else 0)
             ax.grid(alpha=0.3)
         for idx in range(len(levels), rows * cols):
             axes[idx // cols][idx % cols].axis("off")
@@ -216,9 +251,11 @@ def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float]
         for t in thresholds:
             key = str(t)
             ax.plot(leads, report["threshold_metrics"][key]["ts"], marker="o", ms=3, label=f">= {t}")
-        ax.set_xlabel("lead")
+        ax.set_xlabel("lead time")
         ax.set_ylabel("TS")
         ax.set_title(f"Threat Score ({report['channel']})")
+        ax.set_xticks(leads)
+        ax.set_xticklabels(lead_labels, fontsize=7, rotation=45 if freq < 24 else 0)
         ax.grid(alpha=0.3)
         ax.legend()
         fig.tight_layout()
@@ -258,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--neighborhood", type=int, default=1, help="odd neighborhood size for threshold metrics (1 = pointwise)")
     parser.add_argument("--gif", action="store_true", help="also animate compare frames over leads as GIFs")
     parser.add_argument("--gif-duration-ms", type=int, default=500, help="GIF frame duration in milliseconds")
+    parser.add_argument("--freq", type=int, default=24, help="forecast frequency in hours (default: 24 for daily, 6 for IWC)")
+    parser.add_argument("--region", default=None, help="region name (e.g., 'china', 'east_china') for LLM to resolve, or 'lon_min,lon_max,lat_min,lat_max' coordinates")
+    parser.add_argument("--mode", default="compare", choices=["compare", "pred-obs", "pred"], help="visualization mode: compare (3-panel), pred-obs (2-panel), pred (single panel)")
     args = parser.parse_args(argv)
 
     directory = Path(args.pred_dir).expanduser()
@@ -271,9 +311,23 @@ def main(argv: list[str] | None = None) -> int:
     thresholds = [float(v) for v in args.thresholds.split(",") if v.strip()]
 
     pairs = scan_dir(directory)
-    report = compute_all_metrics(pairs, metrics, thresholds, args.channel, args.neighborhood)
-    plot_compare(pairs[0], channels, output_dir, args.gif, args.gif_duration_ms)
-    plot_metric_curves(report, metrics, thresholds, output_dir)
+
+    # Parse region/extent
+    extent = None
+    if args.region:
+        r = args.region.strip()
+        if ',' in r:
+            # Direct coordinates: lon_min,lon_max,lat_min,lat_max
+            parts = [float(x) for x in r.split(',')]
+            if len(parts) == 4:
+                extent = parts
+            else:
+                raise SystemExit("--region coordinates must be 4 values: lon_min,lon_max,lat_min,lat_max")
+        else:
+            raise SystemExit(f"--region name {r!r} requires LLM to resolve coordinates. Use --region lon_min,lon_max,lat_min,lat_max instead.")
+    report = compute_all_metrics(pairs, metrics, thresholds, args.channel, args.neighborhood, freq=args.freq)
+    plot_compare(pairs[0], channels, output_dir, args.gif, args.gif_duration_ms, args.freq, extent, args.mode)
+    plot_metric_curves(report, metrics, thresholds, output_dir, args.freq)
     return 0
 
 

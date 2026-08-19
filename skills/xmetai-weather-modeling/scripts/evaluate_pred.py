@@ -59,6 +59,14 @@ import xarray as xr
 PRED_PATTERN = re.compile(r"^pred_(\d{8})\.nc$", re.IGNORECASE)
 OBS_PATTERN = re.compile(r"^obs_(\d{8})\.nc$", re.IGNORECASE)
 
+# Precipitation grade definitions (threshold in metres, label)
+PRECIP_GRADES = [
+    (0.0001, "light rain (>0.1mm)"),
+    (0.01, "moderate rain (>10mm)"),
+    (0.025, "heavy rain (>25mm)"),
+    (0.05, "torrential rain (>50mm)"),
+]
+
 
 # ---------------------------------------------------------------------------
 # File scanning and loading
@@ -147,6 +155,17 @@ def neighbor_any(mask: np.ndarray, neighborhood: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # RMSE computation: aligned with core's MSE evaluator
 # ---------------------------------------------------------------------------
+
+def lead_label(index: int, freq: int) -> str:
+    """Return a human-readable lead label based on frequency.
+
+    - freq >= 24: shows day number (`D1`, `D2`, ...)
+    - freq < 24: shows hours (`6h`, `12h`, `18h`, ...)
+    """
+    if freq >= 24:
+        return f"D{index + 1}"
+    return f"{freq * (index + 1)}h"
+
 
 def compute_rmse(
     pred: np.ndarray,
@@ -305,17 +324,23 @@ def compute_all_metrics(
     neighborhood: int,
     weight: np.ndarray | None = None,
     top_percent: float = 0.0,
+    freq: int = 24,
+    grade_labels: dict[float, str] | None = None,
 ) -> dict[str, Any]:
     """Compute the requested metrics over all pred/obs pairs.
 
     Returns a report dict with ``levels``, ``n_leads``, ``rmse_per_level``,
     optional ``top_rmse_per_level``, and ``threshold_metrics``.
     """
+    if grade_labels is None:
+        grade_labels = {}
     report: dict[str, Any] = {
         "files": len(pairs),
         "metrics": list(metrics),
         "thresholds": [float(v) for v in thresholds],
+        "grade_labels": grade_labels,
         "channel": channel,
+        "freq_hours": freq,
     }
     if weight is not None:
         report["weighted"] = True
@@ -430,10 +455,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pred-dir", required=True, help="directory containing pred_*.nc / obs_*.nc pairs")
     parser.add_argument("--metrics", default="rmse", help="comma-separated metrics: rmse, ts, pod, far, fb")
-    parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel's physical unit")
+    parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel\'s physical unit")
+    parser.add_argument("--precip-grades", action="store_true", help="use standard precipitation grade thresholds with labels (overrides --thresholds)")
     parser.add_argument("--channel", default="tp", help="channel for threshold metrics")
     parser.add_argument("--neighborhood", type=int, default=1, help="odd neighborhood size for threshold metrics (1 = pointwise)")
     parser.add_argument("--weight-file", default=None, help="path to weight.nc for spatial weighting (core convention)")
+    parser.add_argument("--freq", type=int, default=24, help="forecast frequency in hours (default: 24 for daily, 6 for IWC)")
     parser.add_argument("--top-percent", type=float, default=0.0, help="top X%% extreme value RMSE (0 to disable, e.g. 0.02 for 2%%)")
     parser.add_argument("--output", default=None, help="optional JSON report path")
     args = parser.parse_args(argv)
@@ -447,7 +474,12 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--top-percent must be in [0, 1)")
 
     metrics = [m.strip().lower() for m in args.metrics.split(",") if m.strip()]
-    thresholds = [float(v) for v in args.thresholds.split(",") if v.strip()]
+    if args.precip_grades:
+        thresholds = [t for t, _ in PRECIP_GRADES]
+        grade_labels = {t: label for t, label in PRECIP_GRADES}
+    else:
+        thresholds = [float(v) for v in args.thresholds.split(",") if v.strip()]
+        grade_labels = {}
 
     # Load weight if provided
     weight = None
@@ -464,12 +496,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         pairs = scan_dir(directory)
 
-    report = compute_all_metrics(pairs, metrics, thresholds, args.channel, args.neighborhood, weight, args.top_percent)
+    report = compute_all_metrics(pairs, metrics, thresholds, args.channel, args.neighborhood, weight, args.top_percent, args.freq, grade_labels)
     n_leads = report["n_leads"]
 
     if "rmse" in metrics:
         label = "RMSE (weighted)" if weight is not None else "RMSE (physical units)"
-        rows = [["lead"] + [str(l + 1) for l in range(n_leads)]]
+        rows = [["lead"] + [lead_label(l, args.freq) for l in range(n_leads)]]
         for c, level in enumerate(report["levels"]):
             rows.append([level] + [fmt(report["rmse_per_level"][level][l]) for l in range(n_leads)])
         print(label)
@@ -477,28 +509,73 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.top_percent > 0.0 and "top_rmse_per_level" in report:
             pct_label = f"Top {args.top_percent * 100:g}% RMSE"
-            rows = [["lead"] + [str(l + 1) for l in range(n_leads)]]
+            rows = [["lead"] + [lead_label(l, args.freq) for l in range(n_leads)]]
             for c, level in enumerate(report["levels"]):
                 rows.append([level] + [fmt(report["top_rmse_per_level"][level][l]) for l in range(n_leads)])
             print(pct_label)
             print_table(rows[0], rows[1:])
 
     if any(m in ("ts", "pod", "far", "fb") for m in metrics):
-        for t in thresholds:
-            key = str(t)
-            tm = report["threshold_metrics"][key]
-            if "ts" in metrics:
-                print(f"TS {args.channel} >= {t}")
-                print_table(["lead", "TS"], [[str(l + 1), fmt(tm["ts"][l])] for l in range(n_leads)])
+        # Print summary table with all thresholds
+        if len(thresholds) > 1:
+            print(f"\nThreshold Metrics Summary ({args.channel})")
+            header = ["grade/threshold"] + [lead_label(l, args.freq) for l in range(n_leads)]
+            rows = []
+            for t in thresholds:
+                key = str(t)
+                tm = report["threshold_metrics"][key]
+                label = grade_labels.get(t, f">= {t}")
+                if "ts" in metrics:
+                    rows.append([label] + [fmt(tm["ts"][l]) for l in range(n_leads)])
+            if rows:
+                print("TS:")
+                print_table(header, rows)
+            rows = []
+            for t in thresholds:
+                key = str(t)
+                tm = report["threshold_metrics"][key]
+                label = grade_labels.get(t, f">= {t}")
+                if "pod" in metrics:
+                    rows.append([label] + [fmt(tm["pod"][l]) for l in range(n_leads)])
+            if rows:
+                print("POD:")
+                print_table(header, rows)
+            rows = []
+            for t in thresholds:
+                key = str(t)
+                tm = report["threshold_metrics"][key]
+                label = grade_labels.get(t, f">= {t}")
+                if "far" in metrics:
+                    rows.append([label] + [fmt(tm["far"][l]) for l in range(n_leads)])
+            if rows:
+                print("FAR:")
+                print_table(header, rows)
+            rows = []
+            for t in thresholds:
+                key = str(t)
+                tm = report["threshold_metrics"][key]
+                label = grade_labels.get(t, f">= {t}")
+                if "fb" in metrics:
+                    rows.append([label] + [fmt(tm["fb"][l]) for l in range(n_leads)])
+            if rows:
+                print("FB:")
+                print_table(header, rows)
+        else:
+            for t in thresholds:
+                key = str(t)
+                tm = report["threshold_metrics"][key]
+                if "ts" in metrics:
+                    print(f"TS {args.channel} >= {t}")
+                print_table(["lead", "TS"], [[lead_label(l, args.freq), fmt(tm["ts"][l])] for l in range(n_leads)])
             if "pod" in metrics:
                 print(f"POD {args.channel} >= {t}")
-                print_table(["lead", "POD"], [[str(l + 1), fmt(tm["pod"][l])] for l in range(n_leads)])
+                print_table(["lead", "POD"], [[lead_label(l, args.freq), fmt(tm["pod"][l])] for l in range(n_leads)])
             if "far" in metrics:
                 print(f"FAR {args.channel} >= {t}")
-                print_table(["lead", "FAR"], [[str(l + 1), fmt(tm["far"][l])] for l in range(n_leads)])
+                print_table(["lead", "FAR"], [[lead_label(l, args.freq), fmt(tm["far"][l])] for l in range(n_leads)])
             if "fb" in metrics:
                 print(f"FB {args.channel} >= {t}")
-                print_table(["lead", "FB"], [[str(l + 1), fmt(tm["fb"][l])] for l in range(n_leads)])
+                print_table(["lead", "FB"], [[lead_label(l, args.freq), fmt(tm["fb"][l])] for l in range(n_leads)])
 
     if args.output:
         out = Path(args.output).expanduser()
@@ -509,5 +586,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+
 
 
