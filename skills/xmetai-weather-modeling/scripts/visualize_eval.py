@@ -219,7 +219,7 @@ def plot_composite_error(pairs: list[tuple[Path, Path]], channels: list[str], ou
         levels = [str(v) for v in ds["level"].values]
         lat = np.asarray(ds["lat"].values, dtype=float)
         lon = np.asarray(ds["lon"].values, dtype=float)
-        n_leads = ds.dims["time"]
+        n_leads = ds.sizes["time"]
         lead_times = [np.datetime64(t).astype("datetime64[D]").astype(str) for t in ds["time"].values]
 
     init_labels = []
@@ -425,5 +425,6 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
 
