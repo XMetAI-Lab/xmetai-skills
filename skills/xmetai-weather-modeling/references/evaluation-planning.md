@@ -170,6 +170,28 @@ Output file naming:
 - ``pred-obs_tp_lead01.png`` (pred-obs mode)
 - ``pred_tp_lead01.png`` (pred mode)
 
+## Multi-Init Composite Error (Updated 2026-08-19)
+
+The ``--mode composite`` option aggregates errors across multiple init dates:
+
+- **Mean Bias**: Average of (pred - obs) across all init dates. Reveals systematic over/under-prediction.
+- **RMSE**: Root mean squared error across init dates. Shows error magnitude independent of sign.
+
+Usage:
+
+.. code-block:: bash
+
+    # Composite error using all init dates in pred-dir
+    python visualize_eval.py --pred-dir path/to/pred --mode composite --channels tp,z500
+
+    # Composite error for specific init dates
+    python visualize_eval.py --pred-dir path/to/pred --mode composite --init-date 20200101,20200102
+
+Output: ``composite_<channel>_lead<NN>.png`` (2-panel: Mean Bias / RMSE)
+
+The ``--init-date`` parameter also works with other modes to select a specific init date
+instead of defaulting to the first one found.
+
 ## Region Cropping (Updated 2026-08-18)
 
 The ``--region`` parameter supports regional visualization:
@@ -210,6 +232,7 @@ This affects:
   uses `members > 1`) has not been verified on real inference.
 - Physical units per channel follow `visualize_pred_gif.py`'s `VAR_META`
   (e.g. msl in Pa, tp in m, t2m in K); verify before publishing results.
+
 
 
 

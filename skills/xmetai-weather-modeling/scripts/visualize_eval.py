@@ -10,6 +10,7 @@ Reads the same paired forecast files as ``evaluate_pred.py`` and renders:
 - ``rmse_curves.png``: per-channel RMSE vs forecast lead.
 - ``ts_curves.png``: Threat Score vs forecast lead, one line per threshold.
 - ``threshold_metrics.png``: TS/POD/FAR vs threshold, one line per lead.
+- ``composite_<channel>_lead<NN>.png``: multi-init mean bias + RMSE maps (``--mode composite``).
 
 Usage:
 
@@ -196,6 +197,83 @@ def save_compare_gif(channel: str, pred, obs, levels, lat, lon, lead_times, outp
     print(f"WROTE {out} ({len(frames)} frames)")
 
 
+def plot_composite_error(pairs: list[tuple[Path, Path]], channels: list[str], output_dir: Path, freq: int = 24, extent=None, init_dates: list[str] | None = None) -> None:
+    """Compute mean bias and RMSE across multiple init dates and render maps.
+
+    For each channel and lead, stacks error = pred - obs from all init dates
+    and computes:
+      - Mean bias (systematic error direction)
+      - RMSE (error magnitude)
+    Output: composite_<channel>_lead<NN>.png (2-panel: Mean Bias / RMSE)
+    """
+    from evaluate_pred import PRED_PATTERN
+
+    if init_dates is not None:
+        init_set = set(init_dates)
+        pairs = [(p, o) for p, o in pairs if PRED_PATTERN.match(p.name) and PRED_PATTERN.match(p.name).group(1) in init_set]
+        if not pairs:
+            raise SystemExit(f"no pairs matched init-date filter: {init_dates}")
+
+    # Load first pair to get metadata
+    with xr.open_dataset(pairs[0][0]) as ds:
+        levels = [str(v) for v in ds["level"].values]
+        lat = np.asarray(ds["lat"].values, dtype=float)
+        lon = np.asarray(ds["lon"].values, dtype=float)
+        n_leads = ds.dims["time"]
+        lead_times = [np.datetime64(t).astype("datetime64[D]").astype(str) for t in ds["time"].values]
+
+    init_labels = []
+    for pred_path, _ in pairs:
+        m = PRED_PATTERN.match(pred_path.name)
+        init_labels.append(m.group(1) if m else pred_path.stem)
+
+    for channel in channels:
+        if channel not in levels:
+            print(f"warning: channel {channel!r} not in {levels}; skipped", file=sys.stderr)
+            continue
+        c = levels.index(channel)
+
+        # Stack errors: shape (n_init, n_leads, H, W)
+        errors = []
+        for pred_path, obs_path in pairs:
+            pred, obs, _ = load_pair(pred_path, obs_path)
+            errors.append(pred[:, c, :, :] - obs[:, c, :, :])
+        errors = np.stack(errors, axis=0)  # (n_init, n_leads, H, W)
+
+        mean_bias = np.nanmean(errors, axis=0)   # (n_leads, H, W)
+        rmse_map = np.sqrt(np.nanmean(errors ** 2, axis=0))  # (n_leads, H, W)
+
+        for lead in range(n_leads):
+            bias_field = mean_bias[lead]
+            rmse_field = rmse_map[lead]
+            b_lim = float(np.nanmax(np.abs(bias_field))) if np.any(np.isfinite(bias_field)) else 1.0
+            r_lo, r_hi = robust_limits(rmse_field)
+
+            fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), subplot_kw={"projection": ccrs.PlateCarree()})
+            for ax, field, title, cm, lo, hi in (
+                (axes[0], bias_field, "Mean Bias (pred - obs)", "RdBu_r", -b_lim, b_lim),
+                (axes[1], rmse_field, "RMSE", "hot_r", r_lo, r_hi),
+            ):
+                mesh = render_map(ax, field, lat, lon, title, cm, lo, hi, extent)
+                fig.colorbar(mesh, ax=ax, orientation="vertical", fraction=0.035, pad=0.02, shrink=0.8)
+            n_init = len(pairs)
+            fig.suptitle(f"{channel} | {lead_label(lead, freq)} | {n_init} init dates", fontsize=12)
+            fig.subplots_adjust(left=0.03, right=0.99, top=0.86, bottom=0.10, wspace=0.28)
+            out = output_dir / f"composite_{channel}_lead{lead + 1:02d}.png"
+            fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+            plt.close(fig)
+            print(f"WROTE {out}")
+
+    # Summary file
+    summary = output_dir / "composite_summary.txt"
+    with open(summary, "w", encoding="utf-8") as f:
+        f.write(f"Composite error across {len(pairs)} init dates\n")
+        f.write(f"Init dates: {', '.join(init_labels)}\n")
+        f.write(f"Channels: {', '.join(channels)}\n")
+        f.write(f"Frequency: {freq}h\n")
+    print(f"WROTE {summary}")
+
+
 def plot_compare(first_pair, channels: list[str], output_dir: Path, gif: bool, gif_duration_ms: int, freq: int = 24, extent=None, mode: str = "compare") -> None:
     pred_path, obs_path = first_pair
     with xr.open_dataset(pred_path) as ds:
@@ -297,7 +375,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gif-duration-ms", type=int, default=500, help="GIF frame duration in milliseconds")
     parser.add_argument("--freq", type=int, default=24, help="forecast frequency in hours (default: 24 for daily, 6 for IWC)")
     parser.add_argument("--region", default=None, help="region name (e.g., 'china', 'east_china') for LLM to resolve, or 'lon_min,lon_max,lat_min,lat_max' coordinates")
-    parser.add_argument("--mode", default="compare", choices=["compare", "pred-obs", "pred"], help="visualization mode: compare (3-panel), pred-obs (2-panel), pred (single panel)")
+    parser.add_argument("--init-date", default=None, help="comma-separated init dates to include (default: all found in pred-dir)")
+    parser.add_argument("--mode", default="compare", choices=["compare", "pred-obs", "pred", "composite"], help="visualization mode: compare (3-panel), pred-obs (2-panel), pred (single panel), composite (multi-init mean bias + RMSE)")
     args = parser.parse_args(argv)
 
     directory = Path(args.pred_dir).expanduser()
@@ -325,6 +404,19 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("--region coordinates must be 4 values: lon_min,lon_max,lat_min,lat_max")
         else:
             raise SystemExit(f"--region name {r!r} requires LLM to resolve coordinates. Use --region lon_min,lon_max,lat_min,lat_max instead.")
+    init_dates = [d.strip() for d in args.init_date.split(",") if d.strip()] if args.init_date else None
+
+    if args.mode == "composite":
+        plot_composite_error(pairs, channels, output_dir, args.freq, extent, init_dates)
+        return 0
+
+    # For single-init modes, use first pair (or first matching --init-date)
+    if init_dates is not None:
+        from evaluate_pred import PRED_PATTERN
+        init_set = set(init_dates)
+        filtered = [(p, o) for p, o in pairs if PRED_PATTERN.match(p.name) and PRED_PATTERN.match(p.name).group(1) in init_set]
+        if filtered:
+            pairs = filtered
     report = compute_all_metrics(pairs, metrics, thresholds, args.channel, args.neighborhood, freq=args.freq)
     plot_compare(pairs[0], channels, output_dir, args.gif, args.gif_duration_ms, args.freq, extent, args.mode)
     plot_metric_curves(report, metrics, thresholds, output_dir, args.freq)
@@ -333,3 +425,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
