@@ -144,6 +144,58 @@ The offline evaluation scripts have been aligned with core's metric computation:
 - **Core**: Accumulates raw counts (hit, false_alarm, miss) per frame_index, then computes final scores from aggregated counts.
 - **Offline script**: Now accumulates raw counts across all init dates before computing TS/POD/FAR/FB, matching core's aggregation logic.
 
+## TCC: Temporal Correlation Coefficient (Updated 2026-08-20)
+
+The ``tcc`` metric computes the Pearson correlation between forecast and observation
+time series **across init dates** at each grid point, then spatially averages.
+
+### Formula
+
+For each channel *c* and lead time *t*, at each grid point *(i,j)*:
+
+::
+
+    TCC(c, t) = mean_grid( corr_init( pred[init_dates, c, t, i, j],
+                                       obs[init_dates, c, t, i, j] ) )
+
+- ``corr_init`` is the Pearson correlation across N init dates.
+- Requires at least 3 init dates for a meaningful correlation.
+- NaN/Inf grid points (e.g., ocean for land-only variables) are excluded from
+  the spatial mean.
+
+### Weekly Grouping
+
+For S2S models (``freq=24``, 42 leads = 6 weeks):
+
+- Week 1: Day 1-7 (leads 0-6)
+- Week 2: Day 8-14 (leads 7-13)
+- Week 3: Day 15-21 (leads 14-20)
+- Week 4: Day 22-28 (leads 21-27)
+- Week 5: Day 29-35 (leads 28-34)
+- Week 6: Day 36-42 (leads 35-41)
+
+For IWC models (``freq=6``, 60 leads), each week spans 28 leads (7 days x 4 per day).
+The weekly average is the mean of per-lead TCC values within each week.
+
+### Output
+
+- ``tcc_curves.png``: per-channel TCC vs lead time, with a skill threshold line at 0.5.
+- ``tcc_weekly.png``: grouped bar chart of weekly average TCC per channel.
+- JSON report includes ``tcc_per_level`` (per-lead) and ``tcc_weekly`` (per-week).
+
+### Usage
+
+.. code-block:: bash
+
+    python evaluate_pred.py --pred-dir path/to/pred --metrics tcc
+    python evaluate_pred.py --pred-dir path/to/pred --metrics rmse,tcc --output report.json
+
+### Alignment with Core
+
+The core ``TCC`` evaluator in ``xmetai/metrics/`` computes the same Pearson
+correlation across init dates. The offline script replicates the math without
+requiring distributed ``comm.gather``.
+
 ## Visualization Modes (Updated 2026-08-18)
 
 The ``--mode`` parameter controls the output layout:

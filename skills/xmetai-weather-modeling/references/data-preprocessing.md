@@ -109,7 +109,7 @@ JSON or YAML. Unknown steps abort the plan.
     {"units": {"q": 1000, "tp": 1000, "ttr": 1 / 3600}},
     {"log1p": ["tp"]},
     {"split_levels": {"vars": ["z", "t", "u", "v", "q"], "level_coord": "pressure_level"}},
-    {"merge_to_data": {"coord": "level", "order": ["z500", "t850", "q925"]}},
+    {"merge_to_data": {"coord": "level", "order": ["z1000", "z925", "z850", "z700", "z600", "z500", "z400", "z300", "z250", "z200", "z150", "z100", "z50", "t1000", "t925", "t850", "t700", "t600", "t500", "t400", "t300", "t250", "t200", "t150", "t100", "t50", "u1000", "u925", "u850", "u700", "u600", "u500", "u400", "u300", "u250", "u200", "u150", "u100", "u50", "v1000", "v925", "v850", "v700", "v600", "v500", "v400", "v300", "v250", "v200", "v150", "v100", "v50", "q1000", "q925", "q850", "q700", "q600", "q500", "q400", "q300", "q250", "q200", "q150", "q100", "q50"]}},
     {"normalize": true}
   ]
 }
@@ -152,3 +152,4 @@ Keep downloaded source data, conversion products, and sidecars in separate, pred
 - Never claim training readiness under this route; Data analysis owns that after data exists.
 - Keep credentials out of steps configs, plans, logs, and repository files.
 - When a dataset is not in the data source reference and the user cannot confirm its facts, record the fields as pending confirmation instead of guessing.
+

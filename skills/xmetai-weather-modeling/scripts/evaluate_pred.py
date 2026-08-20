@@ -16,6 +16,9 @@ Metrics:
   (Threat Score, Probability of Detection, False Alarm Rate, Frequency Bias)
   for one channel at the given thresholds, with an optional odd-sized
   neighborhood (default 1 = pointwise), matching the core convention.
+- ``tcc``: Temporal Correlation Coefficient (Pearson correlation across init
+  dates at each grid point, spatially averaged). Requires multiple init dates
+  (at least 3). Outputs per-lead TCC and weekly-averaged TCC for S2S models.
 
 Core alignment notes:
 
@@ -40,6 +43,7 @@ Usage:
     python evaluate_pred.py --pred-dir path/to/pred --metrics rmse,ts,pod,far,fb \\
         --thresholds 0.0001,0.01,0.025,0.05 --channel tp --output report.json
     python evaluate_pred.py --pred-dir path/to/pred --weight-file weight.nc --top-percent 0.02
+    python evaluate_pred.py --pred-dir path/to/pred --metrics tcc
 
 Read-only: this script never writes prediction or observation data.
 """
@@ -308,6 +312,112 @@ def compute_threshold_metrics(
     return threshold_metrics
 
 
+
+# ---------------------------------------------------------------------------
+# TCC: Temporal Correlation Coefficient (weekly average for S2S)
+# ---------------------------------------------------------------------------
+
+def compute_tcc(
+    all_preds: list[np.ndarray],
+    all_obs: list[np.ndarray],
+    levels: list[str],
+    freq: int = 24,
+) -> dict[str, Any]:
+    """Temporal Correlation Coefficient across init dates, averaged over space.
+
+    For each channel and lead time, computes the Pearson correlation between
+    forecast and observation time series across init dates at each grid point,
+    then takes the spatial mean.
+
+    TCC = mean_grid( corr_t(pred[init_dates], obs[init_dates]) )
+
+    Parameters
+    ----------
+    all_preds : list of np.ndarray
+        Each element has shape (T, C, H, W) for one init date.
+    all_obs : list of np.ndarray
+        Same shape as all_preds.
+    levels : list of str
+        Channel names.
+    freq : int
+        Forecast frequency in hours. Used for weekly grouping.
+
+    Returns
+    -------
+    dict with keys:
+        - ``tcc_per_level``: dict[level -> list[float]], TCC per lead
+        - ``tcc_weekly``: dict[level -> list[float]], TCC averaged per week
+        - ``week_labels``: list of str, week labels
+    """
+    n_init = len(all_preds)
+    n_leads = all_preds[0].shape[0]
+    n_levels = all_preds[0].shape[1]
+
+    # Stack: (n_init, T, C, H, W)
+    pred_stack = np.stack(all_preds, axis=0)
+    obs_stack = np.stack(all_obs, axis=0)
+
+    tcc_per_level: dict[str, list[float]] = {lev: [] for lev in levels}
+
+    for c in range(n_levels):
+        for t in range(n_leads):
+            # pred_vals shape: (n_init, H, W)
+            p_vals = pred_stack[:, t, c, :, :]
+            o_vals = obs_stack[:, t, c, :, :]
+            h, w = p_vals.shape[1], p_vals.shape[2]
+
+            # Reshape to (n_init, H*W)
+            p_flat = p_vals.reshape(n_init, -1)
+            o_flat = o_vals.reshape(n_init, -1)
+
+            # Pearson correlation per grid point
+            # Need at least 3 init dates for meaningful correlation
+            if n_init < 3:
+                tcc_per_level[levels[c]].append(float("nan"))
+                continue
+
+            p_mean = p_flat.mean(axis=0, keepdims=True)
+            o_mean = o_flat.mean(axis=0, keepdims=True)
+            p_anom = p_flat - p_mean
+            o_anom = o_flat - o_mean
+
+            cov = (p_anom * o_anom).mean(axis=0)
+            p_std = np.sqrt((p_anom ** 2).mean(axis=0))
+            o_std = np.sqrt((o_anom ** 2).mean(axis=0))
+
+            denom = p_std * o_std
+            # Avoid division by zero (constant fields)
+            valid = denom > 1e-12
+            tcc_grid = np.zeros(h * w)
+            tcc_grid[valid] = cov[valid] / denom[valid]
+            tcc_grid[~valid] = np.nan
+
+            # Spatial mean (ignoring NaN)
+            tcc_val = float(np.nanmean(tcc_grid))
+            tcc_per_level[levels[c]].append(tcc_val)
+
+    # Weekly grouping: S2S 42 leads = 6 weeks (7 days each)
+    leads_per_week = 7 * 24 // freq  # For freq=24: 7 leads/week; freq=6: 28 leads/week
+    n_weeks = max(1, n_leads // leads_per_week) if leads_per_week > 0 else 1
+    week_labels = []
+    tcc_weekly: dict[str, list[float]] = {lev: [] for lev in levels}
+
+    for w_idx in range(n_weeks):
+        start = w_idx * leads_per_week
+        end = min(start + leads_per_week, n_leads)
+        week_labels.append(f"Week {w_idx + 1}")
+        for lev in levels:
+            vals = tcc_per_level[lev][start:end]
+            valid_vals = [v for v in vals if np.isfinite(v)]
+            avg = float(np.mean(valid_vals)) if valid_vals else float("nan")
+            tcc_weekly[lev].append(avg)
+
+    return {
+        "tcc_per_level": tcc_per_level,
+        "tcc_weekly": tcc_weekly,
+        "week_labels": week_labels,
+    }
+
 # ---------------------------------------------------------------------------
 # Main computation
 # ---------------------------------------------------------------------------
@@ -351,6 +461,9 @@ def compute_all_metrics(
     rmse_acc = None
     top_rmse_acc = None
 
+
+    tcc_all_preds = []
+    tcc_all_obs = []
     for i, (pred_path, obs_path) in enumerate(pairs):
         pred, obs, levels = load_pair(pred_path, obs_path)
         if i == 0:
@@ -372,6 +485,9 @@ def compute_all_metrics(
                 if top_percent > 0.0 and "top_rmse_per_level" in rmse_result:
                     top_rmse_acc[:, c] += np.asarray(rmse_result["top_rmse_per_level"][level]) ** 2
 
+        # Collect pred/obs for TCC computation
+        tcc_all_preds.append(pred.copy())
+        tcc_all_obs.append(obs.copy())
     if "rmse" in metrics and rmse_acc is not None:
         rmse_acc = np.sqrt(rmse_acc / len(pairs))
         report["rmse_per_level"] = {
@@ -430,7 +546,20 @@ def compute_all_metrics(
             }
         report["threshold_metrics"] = threshold_metrics
 
+    # TCC computation
+    if "tcc" in metrics:
+        if len(tcc_all_preds) >= 3:
+            tcc_result = compute_tcc(tcc_all_preds, tcc_all_obs, report["levels"], freq)
+            report["tcc_per_level"] = tcc_result["tcc_per_level"]
+            report["tcc_weekly"] = tcc_result["tcc_weekly"]
+            report["week_labels"] = tcc_result["week_labels"]
+        else:
+            report["tcc_per_level"] = {lev: [float("nan")] * n_leads for lev in report["levels"]}
+            report["tcc_weekly"] = {lev: [float("nan")] for lev in report["levels"]}
+            report["week_labels"] = ["Week 1"]
     return report
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +583,7 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pred-dir", required=True, help="directory containing pred_*.nc / obs_*.nc pairs")
-    parser.add_argument("--metrics", default="rmse", help="comma-separated metrics: rmse, ts, pod, far, fb")
+    parser.add_argument("--metrics", default="rmse", help="comma-separated metrics: rmse, ts, pod, far, fb, tcc")
     parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel\'s physical unit")
     parser.add_argument("--precip-grades", action="store_true", help="use standard precipitation grade thresholds with labels (overrides --thresholds)")
     parser.add_argument("--channel", default="tp", help="channel for threshold metrics")
@@ -577,6 +706,24 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"FB {args.channel} >= {t}")
                 print_table(["lead", "FB"], [[lead_label(l, args.freq), fmt(tm["fb"][l])] for l in range(n_leads)])
 
+
+    if "tcc" in metrics and "tcc_per_level" in report:
+        print("\nTCC (Temporal Correlation Coefficient)")
+        print("  (Pearson correlation across init dates, spatially averaged)")
+        tcc_data = report["tcc_per_level"]
+        rows = [["lead"] + [lead_label(l, args.freq) for l in range(n_leads)]]
+        for level in report["levels"]:
+            rows.append([level] + [fmt(tcc_data[level][l]) for l in range(n_leads)])
+        print_table(rows[0], rows[1:])
+
+        if "tcc_weekly" in report:
+            print("\nTCC Weekly Average")
+            week_labels = report["week_labels"]
+            rows = [["channel"] + week_labels]
+            for level in report["levels"]:
+                rows.append([level] + [fmt(v) for v in report["tcc_weekly"][level]])
+            print_table(rows[0], rows[1:])
+
     if args.output:
         out = Path(args.output).expanduser()
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -586,8 +733,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-
-
 

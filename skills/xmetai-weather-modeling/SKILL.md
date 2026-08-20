@@ -56,8 +56,8 @@ metadata:
 - `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr to Zarr.
 - `compute_sidecars.py`: per-channel mean/std/weight sidecar generation.
 - `merge_normalize.py`: merge multiple Zarr stores and normalize them as one dataset.
-- `evaluate_pred.py`: offline RMSE / threshold metrics (TS, POD, FAR, FB) from `pred_*.nc` / `obs_*.nc`.
-- `visualize_eval.py`: map compare/error/pred panels, multi-init composite error (mean bias + RMSE), RMSE/TS curves, threshold metric plots.
+- `evaluate_pred.py`: offline RMSE / threshold metrics (TS, POD, FAR, FB) / TCC (Temporal Correlation Coefficient) from `pred_*.nc` / `obs_*.nc`.
+- `visualize_eval.py`: map compare/error/pred panels, multi-init composite error (mean bias + RMSE), RMSE/TS/TCC curves, threshold metric plots.
 - `collect_experiment_report.py`: lightweight report.
 
 ## Validation Posture

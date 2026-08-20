@@ -9,7 +9,9 @@ Reads the same paired forecast files as ``evaluate_pred.py`` and renders:
   ``--gif``), core-style.
 - ``rmse_curves.png``: per-channel RMSE vs forecast lead.
 - ``ts_curves.png``: Threat Score vs forecast lead, one line per threshold.
-- ``threshold_metrics.png``: TS/POD/FAR vs threshold, one line per lead.
+- `threshold_metrics.png`: TS/POD/FAR vs threshold, one line per lead.
+- `tcc_curves.png`: TCC vs forecast lead (per channel).
+- `tcc_weekly.png`: TCC weekly average bar chart (per channel).
 - ``composite_<channel>_lead<NN>.png``: multi-init mean bias + RMSE maps (``--mode composite``).
 
 Usage:
@@ -298,6 +300,75 @@ def plot_compare(first_pair, channels: list[str], output_dir: Path, gif: bool, g
             save_compare_gif(channel, pred, obs, levels, lat, lon, lead_times, output_dir, gif_duration_ms, freq, extent, mode)
 
 
+def plot_tcc_curves(report: dict, output_dir: Path, freq: int = 24) -> None:
+    """Plot TCC per-lead curve and weekly average bar chart."""
+    if "tcc_per_level" not in report:
+        return
+
+    levels = report["levels"]
+    n_leads = report["n_leads"]
+    leads = list(range(1, n_leads + 1))
+    lead_labels = [lead_label(l - 1, freq) for l in leads]
+    tcc_data = report["tcc_per_level"]
+
+    # --- TCC per-lead curves ---
+    cols = 3
+    nrows = int(np.ceil(len(levels) / cols))
+    fig, axes = plt.subplots(nrows, cols, figsize=(12, 3 * nrows), squeeze=False)
+    for idx, level in enumerate(levels):
+        ax = axes[idx // cols][idx % cols]
+        ax.plot(leads, tcc_data[level], marker="o", ms=3, color="tab:blue")
+        ax.axhline(y=0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.6, label="skill threshold (0.5)")
+        ax.axhline(y=0, color="gray", linestyle="-", linewidth=0.5, alpha=0.4)
+        ax.set_title(level, fontsize=10)
+        ax.set_xlabel("lead time")
+        ax.set_ylabel("TCC")
+        ax.set_ylim(-0.2, 1.0)
+        ax.set_xticks(leads)
+        ax.set_xticklabels(lead_labels, fontsize=7, rotation=45 if freq < 24 else 0)
+        ax.grid(alpha=0.3)
+        if idx == 0:
+            ax.legend(fontsize=7)
+    for idx in range(len(levels), nrows * cols):
+        axes[idx // cols][idx % cols].axis("off")
+    fig.suptitle("TCC per channel (across init dates)", fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    out = output_dir / "tcc_curves.png"
+    fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"WROTE {out}")
+
+    # --- TCC weekly average bar chart ---
+    if "tcc_weekly" not in report:
+        return
+
+    tcc_weekly = report["tcc_weekly"]
+    week_labels = report["week_labels"]
+    n_weeks = len(week_labels)
+    x = np.arange(n_weeks)
+    width = 0.8 / max(len(levels), 1)
+
+    fig, ax = plt.subplots(figsize=(max(6, n_weeks * 1.5), 5))
+    for idx, level in enumerate(levels):
+        vals = tcc_weekly[level]
+        offset = (idx - len(levels) / 2 + 0.5) * width
+        ax.bar(x + offset, vals, width, label=level, alpha=0.85)
+    ax.axhline(y=0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.6, label="skill threshold (0.5)")
+    ax.axhline(y=0, color="gray", linestyle="-", linewidth=0.5, alpha=0.4)
+    ax.set_xlabel("Forecast week")
+    ax.set_ylabel("TCC")
+    ax.set_ylim(-0.2, 1.0)
+    ax.set_xticks(x)
+    ax.set_xticklabels(week_labels)
+    ax.set_title("TCC Weekly Average (across init dates)")
+    ax.grid(alpha=0.3, axis="y")
+    ax.legend(fontsize=8, ncol=min(4, len(levels)))
+    fig.tight_layout()
+    out = output_dir / "tcc_weekly.png"
+    fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"WROTE {out}")
+
 def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float], output_dir: Path, freq: int = 24) -> None:
     leads = list(range(1, report["n_leads"] + 1))
     lead_labels = [lead_label(l - 1, freq) for l in leads]
@@ -362,12 +433,16 @@ def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float]
         print(f"WROTE {out}")
 
 
+
+    if "tcc" in metrics:
+        plot_tcc_curves(report, output_dir, freq)
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pred-dir", required=True, help="directory containing pred_*.nc / obs_*.nc pairs")
     parser.add_argument("--output-dir", default="eval_figures", help="directory for output figures")
     parser.add_argument("--channels", default="z500,tp", help="comma-separated channels for compare/error maps")
-    parser.add_argument("--metrics", default="rmse,ts", help="comma-separated metrics for curves: rmse, ts, pod, far, fb")
+    parser.add_argument("--metrics", default="rmse,ts", help="comma-separated metrics for curves: rmse, ts, pod, far, fb, tcc")
     parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel's physical unit")
     parser.add_argument("--channel", default="tp", help="channel for threshold metrics")
     parser.add_argument("--neighborhood", type=int, default=1, help="odd neighborhood size for threshold metrics (1 = pointwise)")
@@ -425,6 +500,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 
