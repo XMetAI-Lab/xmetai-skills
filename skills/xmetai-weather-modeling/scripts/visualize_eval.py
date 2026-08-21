@@ -369,6 +369,164 @@ def plot_tcc_curves(report: dict, output_dir: Path, freq: int = 24) -> None:
     plt.close(fig)
     print(f"WROTE {out}")
 
+
+def plot_ps_curves(report: dict, output_dir: Path, freq: int = 24) -> None:
+    """Plot PS per-lead curves and overall bar chart."""
+    if "ps_per_level" not in report:
+        return
+
+    levels = report["levels"]
+    n_leads = report["n_leads"]
+    leads = list(range(1, n_leads + 1))
+    lead_labels = [lead_label(l - 1, freq) for l in leads]
+    ps_data = report["ps_per_level"]
+
+    # PS per-lead curves
+    cols = 3
+    nrows = int(np.ceil(len(levels) / cols))
+    fig, axes = plt.subplots(nrows, cols, figsize=(12, 3 * nrows), squeeze=False)
+    for idx, level in enumerate(levels):
+        ax = axes[idx // cols][idx % cols]
+        ax.plot(leads, ps_data[level], marker="o", ms=3, color="tab:green")
+        ax.axhline(y=100, color="gray", linestyle="--", linewidth=0.8, alpha=0.6, label="perfect (100)")
+        ax.axhline(y=60, color="orange", linestyle="--", linewidth=0.8, alpha=0.6, label="reference (60)")
+        ax.set_title(level, fontsize=10)
+        ax.set_xlabel("lead time")
+        ax.set_ylabel("PS")
+        ax.set_ylim(0, 105)
+        ax.set_xticks(leads)
+        ax.set_xticklabels(lead_labels, fontsize=7, rotation=45 if freq < 24 else 0)
+        ax.grid(alpha=0.3)
+        if idx == 0:
+            ax.legend(fontsize=7)
+    for idx in range(len(levels), nrows * cols):
+        axes[idx // cols][idx % cols].axis("off")
+    fig.suptitle("PS per channel (Climate Business Score)", fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    out = output_dir / "ps_curves.png"
+    fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"WROTE {out}")
+
+    # PS overall bar chart
+    if "ps_overall" in report:
+        ps_overall = report["ps_overall"]
+        fig, ax = plt.subplots(figsize=(max(6, len(levels) * 1.2), 5))
+        x = np.arange(len(levels))
+        vals = [ps_overall[lev] for lev in levels]
+        bars = ax.bar(x, vals, color="tab:green", alpha=0.85)
+        ax.axhline(y=100, color="gray", linestyle="--", linewidth=0.8, alpha=0.6, label="perfect (100)")
+        ax.axhline(y=60, color="orange", linestyle="--", linewidth=0.8, alpha=0.6, label="reference (60)")
+        ax.set_xlabel("Channel")
+        ax.set_ylabel("PS")
+        ax.set_ylim(0, 105)
+        ax.set_xticks(x)
+        ax.set_xticklabels(levels, rotation=45, ha="right")
+        ax.set_title("PS Overall (averaged over all leads)")
+        ax.grid(alpha=0.3, axis="y")
+        ax.legend(fontsize=8)
+        # Add value labels on bars
+        for bar, val in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                    f"{val:.1f}", ha="center", va="bottom", fontsize=8)
+        fig.tight_layout()
+        out = output_dir / "ps_overall.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"WROTE {out}")
+
+
+def plot_ips_curves(report: dict, output_dir: Path, freq: int = 24) -> None:
+    """Plot IPS per-pentad curves and component breakdown."""
+    if "ips_per_level" not in report:
+        return
+
+    levels = report["levels"]
+    ips_data = report["ips_per_level"]
+    pentad_labels = report.get("pentad_labels", [])
+    if not pentad_labels:
+        return
+
+    n_pentads = len(pentad_labels)
+    x = np.arange(n_pentads)
+
+    # IPS per-pentad curves
+    cols = 3
+    nrows = int(np.ceil(len(levels) / cols))
+    fig, axes = plt.subplots(nrows, cols, figsize=(12, 3 * nrows), squeeze=False)
+    for idx, level in enumerate(levels):
+        ax = axes[idx // cols][idx % cols]
+        ax.plot(x, ips_data[level]["ips"], marker="o", ms=3, color="tab:purple", label="IPS")
+        ax.axhline(y=50, color="gray", linestyle="--", linewidth=0.8, alpha=0.6, label="no skill (50)")
+        ax.axhline(y=100, color="green", linestyle="--", linewidth=0.8, alpha=0.6, label="perfect (100)")
+        ax.set_title(level, fontsize=10)
+        ax.set_xlabel("Pentad")
+        ax.set_ylabel("IPS")
+        ax.set_ylim(0, 105)
+        ax.set_xticks(x)
+        ax.set_xticklabels(pentad_labels, fontsize=8, rotation=45)
+        ax.grid(alpha=0.3)
+        if idx == 0:
+            ax.legend(fontsize=7)
+    for idx in range(len(levels), nrows * cols):
+        axes[idx // cols][idx % cols].axis("off")
+    fig.suptitle("IPS per channel (Integrated Pattern Score)", fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    out = output_dir / "ips_curves.png"
+    fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"WROTE {out}")
+
+    # IPS component breakdown (PCC and AS)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for idx, (metric, color, title) in enumerate([
+        ("pcc", "tab:blue", "PCC (Pearson Correlation)"),
+        ("as", "tab:orange", "AS (Anomaly Sign Agreement)")
+    ]):
+        ax = axes[idx]
+        for level in levels:
+            ax.plot(x, ips_data[level][metric], marker="o", ms=3, label=level)
+        ax.axhline(y=0 if metric == "pcc" else 0.5, color="gray", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.set_xlabel("Pentad")
+        ax.set_ylabel(metric.upper())
+        ax.set_xticks(x)
+        ax.set_xticklabels(pentad_labels, fontsize=8, rotation=45)
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=7, ncol=min(4, len(levels)))
+    fig.suptitle("IPS Components", fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    out = output_dir / "ips_components.png"
+    fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"WROTE {out}")
+
+    # IPS overall bar chart
+    if "ips_overall" in report:
+        ips_overall = report["ips_overall"]
+        fig, ax = plt.subplots(figsize=(max(6, len(levels) * 1.2), 5))
+        vals = [ips_overall[lev] for lev in levels]
+        bars = ax.bar(np.arange(len(levels)), vals, color="tab:purple", alpha=0.85)
+        ax.axhline(y=50, color="gray", linestyle="--", linewidth=0.8, alpha=0.6, label="no skill (50)")
+        ax.axhline(y=100, color="green", linestyle="--", linewidth=0.8, alpha=0.6, label="perfect (100)")
+        ax.set_xlabel("Channel")
+        ax.set_ylabel("IPS")
+        ax.set_ylim(0, 105)
+        ax.set_xticks(np.arange(len(levels)))
+        ax.set_xticklabels(levels, rotation=45, ha="right")
+        ax.set_title("IPS Overall (weighted by pentad)")
+        ax.grid(alpha=0.3, axis="y")
+        ax.legend(fontsize=8)
+        for bar, val in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                    f"{val:.1f}", ha="center", va="bottom", fontsize=8)
+        fig.tight_layout()
+        out = output_dir / "ips_overall.png"
+        fig.savefig(out, dpi=120, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"WROTE {out}")
+
+
 def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float], output_dir: Path, freq: int = 24) -> None:
     leads = list(range(1, report["n_leads"] + 1))
     lead_labels = [lead_label(l - 1, freq) for l in leads]
@@ -437,13 +595,19 @@ def plot_metric_curves(report: dict, metrics: list[str], thresholds: list[float]
     if "tcc" in metrics:
         plot_tcc_curves(report, output_dir, freq)
 
+    if "ps" in metrics:
+        plot_ps_curves(report, output_dir, freq)
+
+    if "ips" in metrics:
+        plot_ips_curves(report, output_dir, freq)
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pred-dir", required=True, help="directory containing pred_*.nc / obs_*.nc pairs")
     parser.add_argument("--output-dir", default="eval_figures", help="directory for output figures")
     parser.add_argument("--channels", default="z500,tp", help="comma-separated channels for compare/error maps")
-    parser.add_argument("--metrics", default="rmse,ts", help="comma-separated metrics for curves: rmse, ts, pod, far, fb, tcc")
-    parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel's physical unit")
+    parser.add_argument("--metrics", default="rmse,ts", help="comma-separated metrics for curves: rmse, ts, pod, far, fb, tcc, ps, ips")
+    parser.add_argument("--thresholds", default="0.1,10,25,50", help="thresholds in the channel's physical unit")
     parser.add_argument("--channel", default="tp", help="channel for threshold metrics")
     parser.add_argument("--neighborhood", type=int, default=1, help="odd neighborhood size for threshold metrics (1 = pointwise)")
     parser.add_argument("--gif", action="store_true", help="also animate compare frames over leads as GIFs")

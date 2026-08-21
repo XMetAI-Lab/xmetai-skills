@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from convert_to_zarr import GUARD_ACK, canonicalize_latlon, channel_weights, compute_channel_stats, normalize_ds, write_sidecars
+from convert_to_zarr import GUARD_ACK, canonicalize_latlon, channel_weights, compute_channel_stats, default_channel_order, normalize_ds, parse_chunks, write_sidecars
 
 
 def open_store(path: Path):
@@ -75,12 +75,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stores", nargs="+", required=True, help="input Zarr stores (each single-data + channel coord)")
     parser.add_argument("--output", required=True, help="target normalized Zarr store path")
     parser.add_argument("--order", default=None, help="comma-separated target channel order (default: input order)")
+    parser.add_argument(
+        "--output-chunks",
+        default="time=1,level=-1,channel=-1,lat=-1,lon=-1",
+        help="output chunks; -1 means the complete dimension",
+    )
     parser.add_argument("--land-names", default="", help="comma-separated land channel names for weight correction")
     parser.add_argument("--ocean-names", default="", help="comma-separated ocean channel names for weight correction")
     parser.add_argument("--allow-write", action="store_true", help="confirm the write after guard approval")
     parser.add_argument("--overwrite", action="store_true", help="confirm replacing an existing output store")
     parser.add_argument("--ack-risk", default=None, help=f"must equal: {GUARD_ACK}")
     args = parser.parse_args(argv)
+    output_chunks = parse_chunks(args.output_chunks)
 
     stores = [Path(s).expanduser() for s in args.stores]
     output = Path(args.output).expanduser()
@@ -101,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             if not np.array_equal(ds["lon"].values, ref_lon):
                 raise SystemExit("stores have misaligned longitude axes")
 
-        names, coord = [], None
+        input_names, coord = [], None
         arrays = []
         for ds in datasets:
             ch_names, ch_coord = channel_names_of(ds)
@@ -109,18 +115,29 @@ def main(argv: list[str] | None = None) -> int:
                 coord = ch_coord
             elif ch_coord != coord:
                 raise SystemExit(f"channel coordinate mismatch: {ch_coord!r} vs {coord!r}")
-            names.extend(ch_names)
+            input_names.extend(ch_names)
             arrays.append(ds["data"])
+
+        if len(input_names) != len(set(input_names)):
+            duplicates = sorted({name for name in input_names if input_names.count(name) > 1})
+            raise SystemExit(f"input stores contain duplicate channel names: {duplicates}")
 
         if args.order:
             order = [n.strip() for n in args.order.split(",") if n.strip()]
-            missing = [n for n in order if n not in names]
+            if len(order) != len(set(order)):
+                raise SystemExit("--order contains duplicate channel names")
+            missing = [n for n in order if n not in input_names]
             if missing:
                 raise SystemExit(f"order lists unknown channels: {missing}")
+            omitted = [n for n in input_names if n not in order]
+            if omitted:
+                raise SystemExit(f"order omits input channels: {omitted}")
             names = order
+        else:
+            names = default_channel_order(input_names)
 
         merged = xr.concat(arrays, dim=coord)
-        merged = merged.assign_coords({coord: names})
+        merged = merged.sel({coord: names})
         dims = list(merged.dims)
         if "time" in dims:
             dims.remove("time")
@@ -152,10 +169,11 @@ def main(argv: list[str] | None = None) -> int:
         land = {n.strip() for n in args.land_names.split(",") if n.strip()}
         ocean = {n.strip() for n in args.ocean_names.split(",") if n.strip()}
         weight = channel_weights(names, land, ocean)
-        merged = merged.load()  # force in-memory arrays to avoid dask multi-thread zarr writes on Windows
+        if output_chunks:
+            applicable_chunks = {name: size for name, size in output_chunks.items() if name in merged.dims}
+            merged = merged.chunk(applicable_chunks)
         merged["data"].encoding.pop("chunks", None)
-        merged["data"].encoding["chunks"] = tuple(merged.sizes[d] for d in merged["data"].dims)
-        merged.to_zarr(str(output), mode="w" if args.overwrite else "w-", consolidated=True, safe_chunks=False)
+        merged.to_zarr(str(output), mode="w" if args.overwrite else "w-", consolidated=True)
         write_sidecars(output, names, mean, std, weight, coord)
         print(f"sidecars: mean.nc / std.nc / weight.nc -> {output}")
         print(f"WROTE {output}")

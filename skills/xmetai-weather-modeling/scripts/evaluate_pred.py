@@ -34,14 +34,13 @@ Core alignment notes:
   This script uses a padded max-pool equivalent (no longitude wrap) to match.
 
 Thresholds use the channel's physical unit; for ``tp`` (total precipitation in
-metres, daily accumulation for s2s) the common 0.1/10/25/50 mm/day levels are
-``0.0001, 0.01, 0.025, 0.05``.
+mm, daily accumulation for s2s) the common grade thresholds are 0.1/10/25/50 mm/day.
 
 Usage:
 
     python evaluate_pred.py --pred-dir path/to/pred
     python evaluate_pred.py --pred-dir path/to/pred --metrics rmse,ts,pod,far,fb \\
-        --thresholds 0.0001,0.01,0.025,0.05 --channel tp --output report.json
+        --thresholds 0.1,10,25,50 --channel tp --output report.json
     python evaluate_pred.py --pred-dir path/to/pred --weight-file weight.nc --top-percent 0.02
     python evaluate_pred.py --pred-dir path/to/pred --metrics tcc
 
@@ -63,12 +62,13 @@ import xarray as xr
 PRED_PATTERN = re.compile(r"^pred_(\d{8})\.nc$", re.IGNORECASE)
 OBS_PATTERN = re.compile(r"^obs_(\d{8})\.nc$", re.IGNORECASE)
 
-# Precipitation grade definitions (threshold in metres, label)
+# Precipitation grade definitions (threshold in mm, label)
+# Core's inv_normalize outputs tp in mm (metres * 1000).
 PRECIP_GRADES = [
-    (0.0001, "light rain (>0.1mm)"),
-    (0.01, "moderate rain (>10mm)"),
-    (0.025, "heavy rain (>25mm)"),
-    (0.05, "torrential rain (>50mm)"),
+    (0.1, "light rain (>=0.1mm)"),
+    (10, "moderate rain (>=10mm)"),
+    (25, "heavy rain (>=25mm)"),
+    (50, "torrential rain (>=50mm)"),
 ]
 
 
@@ -422,6 +422,221 @@ def compute_tcc(
 # Main computation
 # ---------------------------------------------------------------------------
 
+
+def compute_ps(
+    all_preds: list[np.ndarray],
+    all_obs: list[np.ndarray],
+    levels: list[str],
+    threshold_l1: float = 0.20,
+    threshold_l2: float = 0.50,
+) -> dict[str, Any]:
+    """Climate business PS score.
+
+    Formula: PS = (2*N0 + 2*N1 + 4*N2) / (N + N0 + 2*N1 + 4*N2) * 100
+
+    Anomaly level classification:
+    - Normal: |anom| < threshold_l1
+    - Level-1: threshold_l1 <= |anom| < threshold_l2
+    - Level-2: |anom| >= threshold_l2
+
+    Counts:
+    - N0: grid points where predicted and observed anomaly share the same sign.
+    - N1: N0 subset where both are >= level-1 anomaly.
+    - N2: N1 subset where both are level-2 anomaly.
+    - N: total grid points.
+
+    Parameters
+    ----------
+    all_preds : list of np.ndarray
+        Each element has shape (T, C, H, W) for one init date.
+    all_obs : list of np.ndarray
+        Same shape as all_preds.
+    levels : list of str
+        Channel names.
+    threshold_l1 : float
+        Level-1 anomaly threshold in fractional form (default 0.20 = 20%).
+    threshold_l2 : float
+        Level-2 anomaly threshold in fractional form (default 0.50 = 50%).
+
+    Returns
+    -------
+    dict with keys: ps_per_level, ps_overall
+    """
+    n_leads = all_preds[0].shape[0]
+    n_levels = all_preds[0].shape[1]
+
+    counts = {
+        lev: [{"N0": 0.0, "N1": 0.0, "N2": 0.0, "N": 0.0} for _ in range(n_leads)]
+        for lev in levels
+    }
+
+    for pred, obs in zip(all_preds, all_obs):
+        for c in range(n_levels):
+            for t in range(n_leads):
+                p = pred[t, c].flatten()
+                o = obs[t, c].flatten()
+                p_abs = np.abs(p)
+                o_abs = np.abs(o)
+                p_level = np.zeros_like(p_abs, dtype=np.int32)
+                p_level[p_abs >= threshold_l1] = 1
+                p_level[p_abs >= threshold_l2] = 2
+                o_level = np.zeros_like(o_abs, dtype=np.int32)
+                o_level[o_abs >= threshold_l1] = 1
+                o_level[o_abs >= threshold_l2] = 2
+                # Match torch.sign() equality in core: zero only agrees with
+                # zero, rather than being grouped with positive anomalies.
+                same_sign = np.sign(p) == np.sign(o)
+                n0 = float(same_sign.sum())
+                n1 = float(((o_level >= 1) & (p_level >= 1) & same_sign).sum())
+                n2 = float(((o_level == 2) & (p_level == 2) & same_sign).sum())
+                n = float(p.size)
+                counts[levels[c]][t]["N0"] += n0
+                counts[levels[c]][t]["N1"] += n1
+                counts[levels[c]][t]["N2"] += n2
+                counts[levels[c]][t]["N"] += n
+
+    def _ps_formula(n0, n1, n2, n):
+        if n <= 0.0:
+            return 0.0
+        numerator = 2.0 * n0 + 2.0 * n1 + 4.0 * n2
+        denominator = n + n0 + 2.0 * n1 + 4.0 * n2
+        return float(numerator / denominator * 100.0)
+
+    ps_per_level = {lev: [] for lev in levels}
+    ps_overall = {}
+    for lev in levels:
+        n0t = n1t = n2t = nt = 0.0
+        for t in range(n_leads):
+            c = counts[lev][t]
+            ps_per_level[lev].append(_ps_formula(c["N0"], c["N1"], c["N2"], c["N"]))
+            n0t += c["N0"]; n1t += c["N1"]; n2t += c["N2"]; nt += c["N"]
+        ps_overall[lev] = _ps_formula(n0t, n1t, n2t, nt)
+
+    return {"ps_per_level": ps_per_level, "ps_overall": ps_overall}
+
+
+def compute_ips(
+    all_preds: list[np.ndarray],
+    all_obs: list[np.ndarray],
+    levels: list[str],
+    freq: int = 24,
+    test_times: list[int] | None = None,
+    start_pentad: int = 3,
+    end_pentad: int = 12,
+    pentad_size: int = 5,
+) -> dict[str, Any]:
+    """Integrated Pattern Score for pentad anomaly forecasts.
+
+    IPS_j = ((((PCC_j + 1) / 2) + AS_j) / 2) * 100
+
+    Parameters
+    ----------
+    all_preds : list of np.ndarray
+        Each element has shape (T, C, H, W) for one init date.
+    all_obs : list of np.ndarray
+        Same shape as all_preds.
+    levels : list of str
+        Channel names.
+    freq : int
+        Forecast frequency in hours.
+    test_times : list of int, optional
+        Actual lead-time labels used by core, normally ``freq, 2*freq, ...``.
+    start_pentad : int
+        First pentad to evaluate (default 3).
+    end_pentad : int
+        Last pentad to evaluate (default 12).
+    pentad_size : int
+        Number of days per pentad (default 5).
+
+    Returns
+    -------
+    dict with keys: ips_per_level, ips_overall, pentad_labels
+    """
+    n_leads = all_preds[0].shape[0]
+    if test_times is None:
+        test_times = [(idx + 1) * freq for idx in range(n_leads)]
+    if len(test_times) != n_leads:
+        raise ValueError(f"test_times has {len(test_times)} entries but data has {n_leads} leads")
+    if all(lead % 24 == 0 for lead in test_times) and max(test_times) >= 24:
+        lead_unit = "hour"
+    else:
+        lead_unit = "day" if max(test_times) > end_pentad else "pentad"
+
+    pentads = list(range(start_pentad, end_pentad + 1))
+    pentad_indices = {p: [] for p in pentads}
+    for idx, lead in enumerate(test_times):
+        if lead_unit == "pentad":
+            pentad = lead
+        elif lead_unit == "hour":
+            lead_day = (lead + 23) // 24
+            pentad = (lead_day - 1) // pentad_size + 1
+        else:
+            pentad = (lead - 1) // pentad_size + 1
+        if pentad in pentad_indices:
+            pentad_indices[pentad].append(idx)
+
+    def _lead_weight(p):
+        if 3 <= p <= 4: return 5.0
+        if 5 <= p <= 6: return 4.0
+        if 7 <= p <= 8: return 3.0
+        if 9 <= p <= 10: return 2.0
+        if 11 <= p <= 12: return 1.0
+        return 1.0
+
+    scores = {lev: {p: {"pcc": [], "as": [], "ips": []} for p in pentads} for lev in levels}
+    for pred, obs in zip(all_preds, all_obs):
+        for c_idx, lev in enumerate(levels):
+            for pentad, indices in pentad_indices.items():
+                if not indices: continue
+                p_pentad = pred[indices, c_idx].mean(axis=0)
+                o_pentad = obs[indices, c_idx].mean(axis=0)
+                p_flat = p_pentad.flatten()
+                o_flat = o_pentad.flatten()
+                valid = np.isfinite(p_flat) & np.isfinite(o_flat)
+                p_v, o_v = p_flat[valid], o_flat[valid]
+                if not valid.any():
+                    pcc = 0.0
+                elif np.allclose(p_v, o_v):
+                    # Match core's explicit perfect-pattern shortcut,
+                    # including identical constant fields.
+                    pcc = 1.0
+                else:
+                    p_anom = p_v - p_v.mean()
+                    o_anom = o_v - o_v.mean()
+                    cov = (p_anom * o_anom).mean()
+                    denom = np.sqrt((p_anom**2).mean()) * np.sqrt((o_anom**2).mean())
+                    pcc = float(np.clip(cov / denom, -1.0, 1.0)) if denom > 1e-8 else 0.0
+                sign_match = ((p_pentad >= 0) & (o_pentad >= 0)) | ((p_pentad < 0) & (o_pentad < 0))
+                sign_match_flat = sign_match.flatten()
+                as_score = float(sign_match_flat[valid].mean()) if valid.any() else 0.0
+                ips = ((((pcc + 1.0) / 2.0) + as_score) / 2.0) * 100.0
+                scores[lev][pentad]["pcc"].append(pcc)
+                scores[lev][pentad]["as"].append(as_score)
+                scores[lev][pentad]["ips"].append(ips)
+
+    pentad_labels = [f"P{p}" for p in pentads]
+    ips_per_level = {}
+    ips_overall = {}
+    for lev in levels:
+        lead_ips, lead_pcc, lead_as = [], [], []
+        wsum = wips = 0.0
+        for pentad in pentads:
+            pv = scores[lev][pentad]["pcc"]
+            av = scores[lev][pentad]["as"]
+            iv = scores[lev][pentad]["ips"]
+            lead_pcc.append(float(np.mean(pv)) if pv else 0.0)
+            lead_as.append(float(np.mean(av)) if av else 0.0)
+            lead_ips.append(float(np.mean(iv)) if iv else 0.0)
+            if iv:
+                w = _lead_weight(pentad)
+                wips += w * lead_ips[-1]
+                wsum += w
+        ips_per_level[lev] = {"ips": lead_ips, "pcc": lead_pcc, "as": lead_as}
+        ips_overall[lev] = float(wips / wsum) if wsum > 0 else 0.0
+
+    return {"ips_per_level": ips_per_level, "ips_overall": ips_overall, "pentad_labels": pentad_labels}
+
+
 def fmt(v: float) -> str:
     return "   -  " if not np.isfinite(v) else f"{v:.4f}"
 
@@ -557,6 +772,20 @@ def compute_all_metrics(
             report["tcc_per_level"] = {lev: [float("nan")] * n_leads for lev in report["levels"]}
             report["tcc_weekly"] = {lev: [float("nan")] for lev in report["levels"]}
             report["week_labels"] = ["Week 1"]
+
+    # PS computation
+    if "ps" in metrics:
+        ps_result = compute_ps(tcc_all_preds, tcc_all_obs, report["levels"])
+        report["ps_per_level"] = ps_result["ps_per_level"]
+        report["ps_overall"] = ps_result["ps_overall"]
+
+    # IPS computation
+    if "ips" in metrics:
+        ips_result = compute_ips(tcc_all_preds, tcc_all_obs, report["levels"], freq)
+        report["ips_per_level"] = ips_result["ips_per_level"]
+        report["ips_overall"] = ips_result["ips_overall"]
+        report["pentad_labels"] = ips_result["pentad_labels"]
+
     return report
 
 
@@ -583,8 +812,8 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pred-dir", required=True, help="directory containing pred_*.nc / obs_*.nc pairs")
-    parser.add_argument("--metrics", default="rmse", help="comma-separated metrics: rmse, ts, pod, far, fb, tcc")
-    parser.add_argument("--thresholds", default="0.0001,0.01,0.025,0.05", help="thresholds in the channel\'s physical unit")
+    parser.add_argument("--metrics", default="rmse", help="comma-separated metrics: rmse, ts, pod, far, fb, tcc, ps, ips")
+    parser.add_argument("--thresholds", default="0.1,10,25,50", help="thresholds in the channel\'s physical unit")
     parser.add_argument("--precip-grades", action="store_true", help="use standard precipitation grade thresholds with labels (overrides --thresholds)")
     parser.add_argument("--channel", default="tp", help="channel for threshold metrics")
     parser.add_argument("--neighborhood", type=int, default=1, help="odd neighborhood size for threshold metrics (1 = pointwise)")
@@ -723,6 +952,46 @@ def main(argv: list[str] | None = None) -> int:
             for level in report["levels"]:
                 rows.append([level] + [fmt(v) for v in report["tcc_weekly"][level]])
             print_table(rows[0], rows[1:])
+
+    if "ps" in metrics and "ps_per_level" in report:
+        print("\nPS (Climate Business PS Score)")
+        print("  PS = (2*N0 + 2*N1 + 4*N2) / (N + N0 + 2*N1 + 4*N2) * 100")
+        ps_data = report["ps_per_level"]
+        rows = [["lead"] + [lead_label(l, args.freq) for l in range(n_leads)]]
+        for level in report["levels"]:
+            rows.append([level] + [fmt(ps_data[level][l]) for l in range(n_leads)])
+        print_table(rows[0], rows[1:])
+
+        if "ps_overall" in report:
+            print("\nPS Overall")
+            print_table(["channel", "PS"], [[lev, fmt(report["ps_overall"][lev])] for lev in report["levels"]])
+
+    if "ips" in metrics and "ips_per_level" in report:
+        print("\nIPS (Integrated Pattern Score)")
+        print("  IPS = ((((PCC + 1) / 2) + AS) / 2) * 100")
+        ips_data = report["ips_per_level"]
+        pentad_labels = report.get("pentad_labels", [])
+        if pentad_labels:
+            rows = [["channel"] + pentad_labels]
+            for level in report["levels"]:
+                rows.append([level] + [fmt(v) for v in ips_data[level]["ips"]])
+            print_table(rows[0], rows[1:])
+
+            print("\nIPS PCC Component")
+            rows = [["channel"] + pentad_labels]
+            for level in report["levels"]:
+                rows.append([level] + [fmt(v) for v in ips_data[level]["pcc"]])
+            print_table(rows[0], rows[1:])
+
+            print("\nIPS AS Component")
+            rows = [["channel"] + pentad_labels]
+            for level in report["levels"]:
+                rows.append([level] + [fmt(v) for v in ips_data[level]["as"]])
+            print_table(rows[0], rows[1:])
+
+        if "ips_overall" in report:
+            print("\nIPS Overall (weighted)")
+            print_table(["channel", "IPS"], [[lev, fmt(report["ips_overall"][lev])] for lev in report["levels"]])
 
     if args.output:
         out = Path(args.output).expanduser()

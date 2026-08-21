@@ -9,6 +9,7 @@ then executed before any mutation.
 Usage:
 
     python convert_to_zarr.py --input era5_sample.nc --output out.zarr
+    python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr
     python convert_to_zarr.py --input era5_sample.nc --output out.zarr --steps-config steps.json
     python convert_to_zarr.py --input era5_sample.nc --output out.zarr --allow-write --ack-risk I-understand-this-mutates-zarr
 
@@ -56,6 +57,7 @@ seconds. The accumulation window must follow the selected model contract
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import re
 import subprocess
@@ -136,6 +138,73 @@ def open_input(path: Path):
         except Exception:
             return _open_grib_by_shortnames(path)
     return xr.open_dataset(path)
+
+
+def open_inputs(paths: list[Path], chunks: dict[str, int] | None = None):
+    """Open one input or lazily combine homogeneous NetCDF files by coordinates."""
+    if len(paths) == 1:
+        ds = open_input(paths[0])
+        if not chunks:
+            return ds
+        applicable = {name: size for name, size in chunks.items() if name in ds.dims}
+        return ds.chunk(applicable) if applicable else ds
+    unsupported = [str(p) for p in paths if format_label(p) != "netcdf"]
+    if unsupported:
+        raise SystemExit(
+            "multiple inputs currently require NetCDF files; convert Zarr/GRIB inputs "
+            f"separately: {unsupported[:3]}"
+        )
+    return xr.open_mfdataset(
+        [str(p) for p in paths],
+        combine="by_coords",
+        # netCDF4/HDF5 file opens are not reliably thread-safe on Windows.
+        # Data variables remain lazy and downstream Dask reductions/writes can
+        # still execute chunk tasks concurrently.
+        parallel=False,
+        chunks=chunks,
+        data_vars="minimal",
+        coords="minimal",
+        compat="override",
+    )
+
+
+def parse_chunks(value: str | None) -> dict[str, int] | None:
+    """Parse ``time=4,level=76`` style chunk specifications."""
+    if not value:
+        return None
+    chunks: dict[str, int] = {}
+    for item in value.split(","):
+        try:
+            name, raw_size = item.split("=", 1)
+            size = int(raw_size)
+        except ValueError as exc:
+            raise SystemExit(f"invalid chunks specification: {value!r}") from exc
+        name = name.strip()
+        if not name or size == 0 or size < -1:
+            raise SystemExit(f"invalid chunk entry: {item!r}")
+        chunks[name] = size
+    return chunks
+
+
+def resolve_inputs(values: list[str], pattern: str | None) -> list[Path]:
+    """Resolve explicit inputs plus an optional glob into sorted unique paths."""
+    raw = list(values)
+    if pattern:
+        raw.extend(sorted(glob.glob(str(Path(pattern).expanduser()))))
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for value in raw:
+        path = Path(value).expanduser()
+        resolved = path.resolve()
+        if resolved not in seen:
+            paths.append(path)
+            seen.add(resolved)
+    if not paths:
+        raise SystemExit("no inputs matched --input/--input-glob")
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        raise SystemExit(f"input not found: {missing[:3]}")
+    return paths
 
 
 def canonicalize_latlon(ds):
@@ -237,7 +306,10 @@ def apply_steps(ds, steps: list[dict[str, Any]]):
         elif "merge_to_data" in step:
             cfg = step["merge_to_data"]
             coord = str(cfg.get("coord", "level"))
-            names = [str(n) for n in cfg.get("order", [])] or list(ds.data_vars)
+            requested_order = [str(n) for n in cfg.get("order", [])]
+            if len(requested_order) != len(set(requested_order)):
+                raise SystemExit("merge_to_data order contains duplicate channel names")
+            names = requested_order or default_channel_order(list(ds.data_vars))
             if len(names) == 0:
                 raise SystemExit("merge_to_data: no variables to merge")
             missing = [n for n in names if n not in ds.data_vars]
@@ -275,6 +347,30 @@ def apply_steps(ds, steps: list[dict[str, Any]]):
 
 LEVEL_RE = re.compile(r"^([A-Za-z]+)_?(\d+)$")
 
+# Canonical S2S order read from D:\cla.zarr/level. This is an ordering
+# default, not a required schema: partial and single-channel datasets remain
+# valid, while non-S2S channels are retained after the known channels.
+CLA_76_CHANNELS = [
+    *[f"z{level}" for level in (1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50)],
+    *[f"t{level}" for level in (1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50)],
+    *[f"u{level}" for level in (1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50)],
+    *[f"v{level}" for level in (1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50)],
+    *[f"q{level}" for level in (1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50)],
+    "t2m", "d2m", "sst", "ttr", "10u", "10v", "100u", "100v", "msl", "tcwv", "tp",
+]
+CLA_76_CHANNEL_SET = frozenset(CLA_76_CHANNELS)
+
+
+def default_channel_order(names: list[str]) -> list[str]:
+    """Order known channels like cla.zarr, then retain unknown channels."""
+    if len(names) != len(set(names)):
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        raise SystemExit(f"duplicate channel names: {duplicates}")
+    available = set(names)
+    canonical = [name for name in CLA_76_CHANNELS if name in available]
+    extras = [name for name in names if name not in CLA_76_CHANNEL_SET]
+    return canonical + extras
+
 
 def compute_channel_stats(ds):
     """Return (channel names, mean, std, channel coord) from the prepared dataset."""
@@ -282,21 +378,22 @@ def compute_channel_stats(ds):
     if coord and "data" in ds.data_vars:
         names = [str(v) for v in ds.coords[coord].values]
         da = ds["data"]
-        mean = np.empty(len(names), dtype=np.float32)
-        std = np.empty(len(names), dtype=np.float32)
-        for i, name in enumerate(names):
-            sub = da.sel({coord: name})
-            dims = [d for d in sub.dims if d != coord]
-            mean[i] = float(sub.mean(dim=dims, skipna=True).values)
-            std[i] = float(sub.std(dim=dims, skipna=True).values)
+        dims = [d for d in da.dims if d != coord]
+        stats = xr.Dataset(
+            {"mean": da.mean(dim=dims, skipna=True), "std": da.std(dim=dims, skipna=True)}
+        ).compute()
+        mean = np.asarray(stats["mean"].values, dtype=np.float32)
+        std = np.asarray(stats["std"].values, dtype=np.float32)
         return names, mean, std, coord
     names = list(ds.data_vars)
-    mean = np.empty(len(names), dtype=np.float32)
-    std = np.empty(len(names), dtype=np.float32)
-    for i, name in enumerate(names):
-        da = ds[name]
-        mean[i] = float(da.mean(skipna=True).values)
-        std[i] = float(da.std(skipna=True).values)
+    stats = xr.Dataset(
+        {
+            **{f"mean_{i}": ds[name].mean(skipna=True) for i, name in enumerate(names)},
+            **{f"std_{i}": ds[name].std(skipna=True) for i, name in enumerate(names)},
+        }
+    ).compute()
+    mean = np.asarray([stats[f"mean_{i}"].item() for i in range(len(names))], dtype=np.float32)
+    std = np.asarray([stats[f"std_{i}"].item() for i in range(len(names))], dtype=np.float32)
     return names, mean, std, ""
 
 
@@ -357,21 +454,21 @@ def describe(ds) -> dict[str, Any]:
     }
 
 
-def run_guard(input_path: Path, output_path: Path, overwrite: bool) -> None:
+def run_guard(input_paths: list[Path], output_path: Path, overwrite: bool) -> None:
     guard = Path(__file__).resolve().parent / "zarr_write_guard.py"
     cmd = [
         sys.executable,
         str(guard),
         "--operation",
         "convert",
-        "--input",
-        str(input_path),
         "--output",
         str(output_path),
         "--allow-write",
         "--ack-risk",
         GUARD_ACK,
     ]
+    for input_path in input_paths:
+        cmd += ["--input", str(input_path)]
     if overwrite:
         cmd.append("--overwrite")
     try:
@@ -383,23 +480,31 @@ def run_guard(input_path: Path, output_path: Path, overwrite: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--input", required=True, help="NetCDF file or Zarr store to convert")
+    parser.add_argument("--input", action="append", default=[], help="input path; repeat for multiple NetCDF files")
+    parser.add_argument("--input-glob", default=None, help="glob for a homogeneous NetCDF collection")
     parser.add_argument("--output", required=True, help="target Zarr store path")
     parser.add_argument("--steps-config", default=None, help="JSON/YAML steps config")
+    parser.add_argument("--input-chunks", default="time=4", help="lazy input chunks, e.g. time=4")
+    parser.add_argument(
+        "--output-chunks",
+        default="time=1,level=-1,channel=-1,lat=-1,lon=-1",
+        help="output chunks; -1 means the complete dimension",
+    )
     parser.add_argument("--allow-write", action="store_true", help="confirm the write after guard approval")
     parser.add_argument("--overwrite", action="store_true", help="confirm replacing an existing output store")
     parser.add_argument("--ack-risk", default=None, help=f"must equal: {GUARD_ACK}")
     args = parser.parse_args(argv)
 
-    input_path = Path(args.input).expanduser()
+    input_paths = resolve_inputs(args.input, args.input_glob)
+    input_path = input_paths[0]
     output_path = Path(args.output).expanduser()
-    if not input_path.exists():
-        raise SystemExit(f"input not found: {input_path}")
+    input_chunks = parse_chunks(args.input_chunks)
+    output_chunks = parse_chunks(args.output_chunks)
 
     steps = load_steps_config(args.steps_config)
     do_normalize = any("normalize" in step for step in steps)
     try:
-        ds = open_input(input_path)
+        ds = open_inputs(input_paths, input_chunks)
     except Exception as exc:
         if format_label(input_path) == "grib":
             raise SystemExit(
@@ -414,24 +519,20 @@ def main(argv: list[str] | None = None) -> int:
         before = describe(ds)
         ds = apply_steps(ds, steps)
         ds = canonicalize_latlon(ds)
-        if do_normalize:
-            names, mean, std, coord = compute_channel_stats(ds)
-            land_names, ocean_names = normalize_land_ocean(steps)
-            weight = channel_weights(names, set(land_names), set(ocean_names))
-            ds = normalize_ds(ds, mean, std, coord, names)
-            preview = ", ".join(f"{n}={m:.3g}/{s:.3g}" for n, m, s in list(zip(names, mean, std))[:3])
-            print(f"normalize: {len(names)} channels (e.g. {preview} ...); sidecars written on --allow-write")
         after = describe(ds)
     finally:
         ds.close()
 
-    print(f"input : {input_path}")
+    print(f"inputs: {len(input_paths)} ({input_paths[0]}{f' ... {input_paths[-1]}' if len(input_paths) > 1 else ''})")
     print(f"format: {format_label(input_path)}")
     print(f"before: {before['dims']} vars={before['variables']}")
     if steps:
         print(f"steps : {len(steps)} (see config: {args.steps_config})")
     print(f"after : {after['dims']} vars={after['variables']}")
     print(f"output: {output_path}")
+    print(f"chunks: input={input_chunks or 'backend'} output={output_chunks or 'backend'}")
+    if do_normalize:
+        print("normalize: statistics deferred until the guarded write phase")
 
     if not args.allow_write:
         print("\nDRY-RUN: nothing was written.")
@@ -441,10 +542,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.ack_risk != GUARD_ACK:
         raise SystemExit(f"Refusing write: --ack-risk must equal {GUARD_ACK}")
 
-    run_guard(input_path, output_path, args.overwrite)
+    run_guard(input_paths, output_path, args.overwrite)
 
     # Guard passed; reopen the dataset for the actual write.
-    ds = open_input(input_path)
+    ds = open_inputs(input_paths, input_chunks)
     try:
         ds = apply_steps(ds, steps)
         ds = canonicalize_latlon(ds)
@@ -453,6 +554,9 @@ def main(argv: list[str] | None = None) -> int:
             land_names, ocean_names = normalize_land_ocean(steps)
             weight = channel_weights(names, set(land_names), set(ocean_names))
             ds = normalize_ds(ds, mean, std, coord, names)
+        if output_chunks:
+            applicable_chunks = {name: size for name, size in output_chunks.items() if name in ds.dims}
+            ds = ds.chunk(applicable_chunks)
         ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-", consolidated=True)
         if do_normalize:
             write_sidecars(output_path, names, mean, std, weight, coord or "channel")

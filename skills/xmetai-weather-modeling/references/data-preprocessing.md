@@ -73,10 +73,13 @@ Dry-run conversion plan first; guarded write on approval.
 
 ```text
 python convert_to_zarr.py --input in.nc --output out.zarr [--steps-config steps.json]
+python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr [--input-chunks time=4]
 python convert_to_zarr.py --input in.nc --output out.zarr --allow-write --ack-risk I-understand-this-mutates-zarr [--overwrite]
 ```
 
 The write path requires the Zarr write guard and explicit approval flags. Inputs: NetCDF (classic/NetCDF-4), Zarr, or GRIB (multi-variable mixed-edition GRIB is read per variable automatically). Output: Zarr store only.
+
+Repeat `--input` or use `--input-glob` for a homogeneous NetCDF collection. Multi-file inputs are opened lazily with `open_mfdataset(combine="by_coords")`; file opening is serial for Windows netCDF4/HDF5 safety, while downstream Dask reductions and writes remain chunked. Dry-run inspects metadata and the planned transforms only; it deliberately defers full-data normalization statistics until the guarded write phase. Use `--input-chunks` and `--output-chunks` to control memory and I/O. The default output layout keeps one time step per chunk and complete channel/spatial dimensions, matching full-field weather-model reads without loading the whole time series.
 
 cfgrib index files (`.idx`) are not written: all GRIB reads pass `indexpath=""`. The `merge_to_data` step combines data variables into a single `data` variable with a `level`/`channel` coordinate, matching the model library layout.
 
@@ -88,10 +91,12 @@ Compute the per-channel `mean` / `std` / `weight` sidecars for a prepared Zarr s
 
 ```text
 python compute_sidecars.py --input out.zarr --output-dir <dir>
-python compute_sidecars.py --input out.zarr --output-dir <dir> --allow-write [--overwrite]
+python compute_sidecars.py --input out.zarr --output-dir <dir> --chunks time=4 --allow-write [--overwrite]
 ```
 
 Writes `mean.nc` / `std.nc` / `weight.nc` (1-D per-channel NetCDF arrays); the core reader prefers `.nc` over `.npy` over Zarr variables and reshapes them per channel. `weight` follows the core convention (level-scaled, optional land/ocean corrections via `--land-names` / `--ocean-names`, normalized to a maximum of 1).
+
+Channel statistics are reduced as one lazy computation graph instead of separately materializing every channel's mean and standard deviation. The operation remains a full-data scan, but its memory use is bounded by the configured chunks.
 
 Compute sidecars from the unit-converted, log-transformed data before normalization. A channel with zero variance is written as `std=0`; the core normalizer treats zero std as 1.
 
@@ -115,7 +120,7 @@ JSON or YAML. Unknown steps abort the plan.
 }
 ```
 
-`merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`; omit `order` to use the current variable order. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `tp` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
+`merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`. When `order` is omitted, channels present in the canonical `D:\cla.zarr` 76-channel contract are automatically ordered as 13 pressure levels from 1000 to 50 hPa for each of `z`, `t`, `u`, `v`, `q`, followed by `t2m,d2m,sst,ttr,10u,10v,100u,100v,msl,tcwv,tp`. A single channel or subset keeps its relative position in that contract; non-contract channels remain available and are appended in their original order. An explicit `order` remains authoritative. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `tp` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
 
 Precipitation unit convention: precipitation channels are normalized to **mm accumulated values** before `log1p`/`normalize`. ERA5 and ERA5-Land deliver `tp` in metres (step-accumulated), so the steps config multiplies it by 1000 (`"tp": 1000`); rate-form precipitation (`kg m-2 s-1`, `mm/h` averages, or `mm/s`) must first be multiplied by the accumulation length in seconds. The accumulation window must follow the selected model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models) and must be recorded in the download plan so a given data source's original unit and window can be verified.
 
@@ -125,7 +130,9 @@ Output Zarr stores always use `lat`/`lon` as the grid coordinate names; CDS inpu
 
 `flatten_step` merges the `time` and `step` dimensions of a GRIB-derived dataset into a single `time` axis using the `valid_time` coordinate, drops all-NaN combinations (for example ERA5-Land short-forecast GRIB frames outside the requested window), and reorders to `(time, level, lat, lon)`. Use it after `merge_to_data` for GRIB inputs that carry a `step` dimension.
 
-When a model dataset is built from multiple converted Zarr stores (for example 65 pressure-level channels plus 11 single-level channels), merge and normalize them as one dataset with `merge_normalize.py`: it verifies time/lat/lon alignment, concatenates the channel dimension (channel count is determined by the inputs), computes per-channel statistics over the merged data, and writes the normalized Zarr plus sidecars. Do not normalize each input store separately before merging.
+When a model dataset is built from multiple converted Zarr stores (for example 65 pressure-level channels plus 11 single-level channels), merge and normalize them as one dataset with `merge_normalize.py`: it verifies time/lat/lon alignment, concatenates the channel dimension (channel count is determined by the inputs), defaults to the same `cla.zarr` relative channel order, computes per-channel statistics over the merged data, and writes the normalized Zarr plus sidecars. `--order` overrides the default but must list every input channel exactly once. Do not normalize each input store separately before merging.
+
+`merge_normalize.py` remains lazy through the final `to_zarr` call and never loads the complete merged dataset into RAM. Its `--output-chunks` option defaults to one time step per chunk with full channel/spatial dimensions; tune the time chunk only after measuring the intended storage and training access pattern.
 
 ## Normalization Convention
 

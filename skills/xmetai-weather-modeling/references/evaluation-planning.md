@@ -92,8 +92,8 @@ Metric parity notes:
 - Core replaces NaN with 0 before training (`torch.nan_to_num`); the offline
   script skips invalid grid points instead, which differs for channels with
   missing values (e.g. `sst` over land).
-- Threshold units follow the channel's physical unit (for `tp`: metres, so
-  0.1/10/25/50 mm/day are `0.0001, 0.01, 0.025, 0.05`).
+- Threshold units follow the channel's physical unit. For `tp`, model output is
+  already in mm after `inv_normalize`, so thresholds are 0.1/10/25/50 mm/day.
 
 ## Evaluation Visualization (`scripts/visualize_eval.py`)
 
@@ -196,6 +196,13 @@ The core ``TCC`` evaluator in ``xmetai/metrics/`` computes the same Pearson
 correlation across init dates. The offline script replicates the math without
 requiring distributed ``comm.gather``.
 
+PS and IPS parity is also checked against the core metric classes on shared
+synthetic inputs. PS uses the same zero-aware `sign()` comparison and count
+aggregation. IPS uses core-style lead-time labels for pentad grouping and the
+same perfect-pattern, PCC, AS, and lead-weight rules. TS/POD/FAR/FB remain
+configurable for one selected channel, while IPS is reported by pentad as
+defined by the metric.
+
 ## Visualization Modes (Updated 2026-08-18)
 
 The ``--mode`` parameter controls the output layout:
@@ -283,7 +290,8 @@ This affects:
   size-1 dims; how multi-member prediction tensors are saved (if any model
   uses `members > 1`) has not been verified on real inference.
 - Physical units per channel follow `visualize_pred_gif.py`'s `VAR_META`
-  (e.g. msl in Pa, tp in m, t2m in K); verify before publishing results.
+  except that the current `tp` output convention is mm after `inv_normalize`
+  (e.g. msl in Pa, tp in mm, t2m in K); verify before publishing results.
 
 
 

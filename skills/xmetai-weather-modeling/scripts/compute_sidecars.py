@@ -38,13 +38,30 @@ except ImportError:  # pragma: no cover - environment without parsing deps
 LEVEL_RE = re.compile(r"^([A-Za-z]+)_?(\d+)$")
 
 
-def open_zarr(path: Path):
+def open_zarr(path: Path, chunks: dict[str, int] | None = None):
     if xr is None:
         raise SystemExit("xarray is not installed")
     try:
-        return xr.open_zarr(path, consolidated=True)
+        return xr.open_zarr(path, consolidated=True, chunks=chunks)
     except Exception:
-        return xr.open_zarr(path, consolidated=False)
+        return xr.open_zarr(path, consolidated=False, chunks=chunks)
+
+
+def parse_chunks(value: str | None) -> dict[str, int] | None:
+    if not value:
+        return None
+    chunks: dict[str, int] = {}
+    for item in value.split(","):
+        try:
+            name, raw_size = item.split("=", 1)
+            size = int(raw_size)
+        except ValueError as exc:
+            raise SystemExit(f"invalid chunks specification: {value!r}") from exc
+        name = name.strip()
+        if not name or size == 0 or size < -1:
+            raise SystemExit(f"invalid chunk entry: {item!r}")
+        chunks[name] = size
+    return chunks
 
 
 def channel_names(ds, coord: str | None) -> tuple[list[str], str]:
@@ -59,14 +76,26 @@ def channel_names(ds, coord: str | None) -> tuple[list[str], str]:
 
 
 def per_channel_stats(ds, names: list[str], coord: str) -> tuple[np.ndarray, np.ndarray]:
-    mean = np.empty(len(names), dtype=np.float32)
-    std = np.empty(len(names), dtype=np.float32)
-    for i, name in enumerate(names):
-        da = ds["data"].sel({coord: name}) if coord else ds[name]
+    if coord:
+        da = ds["data"]
         dims = [d for d in da.dims if d != coord]
-        mean[i] = float(da.mean(dim=dims, skipna=True).values)
-        std[i] = float(da.std(dim=dims, skipna=True).values)
-    return mean, std
+        stats = xr.Dataset(
+            {"mean": da.mean(dim=dims, skipna=True), "std": da.std(dim=dims, skipna=True)}
+        ).compute()
+        return (
+            np.asarray(stats["mean"].values, dtype=np.float32),
+            np.asarray(stats["std"].values, dtype=np.float32),
+        )
+    stats = xr.Dataset(
+        {
+            **{f"mean_{i}": ds[name].mean(skipna=True) for i, name in enumerate(names)},
+            **{f"std_{i}": ds[name].std(skipna=True) for i, name in enumerate(names)},
+        }
+    ).compute()
+    return (
+        np.asarray([stats[f"mean_{i}"].item() for i in range(len(names))], dtype=np.float32),
+        np.asarray([stats[f"std_{i}"].item() for i in range(len(names))], dtype=np.float32),
+    )
 
 
 def channel_weights(names: list[str], land: set[str], ocean: set[str]) -> np.ndarray:
@@ -90,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", required=True, help="prepared Zarr store")
     parser.add_argument("--output-dir", required=True, help="directory for sidecar files")
     parser.add_argument("--channel-coord", default=None, help="level or channel (auto-detected)")
+    parser.add_argument("--chunks", default="time=4", help="lazy read chunks, e.g. time=4")
     parser.add_argument("--land-names", default="", help="comma-separated land channel names")
     parser.add_argument("--ocean-names", default="", help="comma-separated ocean channel names")
     parser.add_argument("--allow-write", action="store_true", help="write sidecar files")
@@ -101,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     if not input_path.exists():
         raise SystemExit(f"input not found: {input_path}")
 
-    ds = open_zarr(input_path)
+    ds = open_zarr(input_path, parse_chunks(args.chunks))
     try:
         names, coord = channel_names(ds, args.channel_coord)
         mean, std = per_channel_stats(ds, names, coord)
