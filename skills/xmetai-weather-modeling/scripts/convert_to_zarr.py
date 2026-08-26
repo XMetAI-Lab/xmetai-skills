@@ -21,6 +21,10 @@ Steps config (JSON or YAML):
         {"keep_vars": ["z", "t", "q"]},
         {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
         {"resample": {"freq": "6h", "operator": "mean"}},
+        {"regrid": {"target": "s2s_1.5deg", "method": "linear",
+                    "variable_methods": {"lsm": "nearest"}}},
+        {"merge_static": {"order": ["z", "lsm"], "coord": "channel",
+                          "name": "const"}},
         {"units": {"q": 1000, "tp": 1000, "ttr": 1 / 3600}},
         {"log1p": ["tp"]},
         {"split_levels": {"vars": ["z", "t", "u", "v", "q"],
@@ -44,6 +48,11 @@ per-channel mean/std (and level-scaled weights) from the prepared data,
 scales the stored values with ``(x - mean) / std``, and writes
 ``mean.nc`` / ``std.nc`` / ``weight.nc`` next to the output Zarr. Unknown
 steps abort the plan. The script never writes without the guard.
+
+Static fields use the same transforms, followed by ``merge_static`` and
+``--output-format static-netcdf``.  Every time-like dimension on a static
+variable must have length one; it is removed before writing a core-compatible
+``const(channel, lat, lon)`` DataArray.
 
 Precipitation unit convention: precipitation channels are normalized to
 **mm accumulated values** before ``log1p``/``normalize``. ERA5 and ERA5-Land
@@ -224,6 +233,103 @@ def canonicalize_latlon(ds):
     return ds.rename(rename) if rename else ds
 
 
+def _s2s_target_coords() -> dict[str, np.ndarray]:
+    """Return the exact 121 x 240 grid used by the S2S cla.zarr contract."""
+    return {
+        "lat": np.linspace(90.0, -90.0, 121, dtype=np.float64),
+        "lon": np.arange(240, dtype=np.float64) * 1.5,
+    }
+
+
+TARGET_GRIDS = {"s2s_1.5deg": _s2s_target_coords}
+REGRID_METHODS = frozenset({"linear", "nearest"})
+
+
+def _prepare_source_grid(ds):
+    """Canonicalize a rectilinear source grid for xarray interpolation."""
+    ds = canonicalize_latlon(ds)
+    missing = [name for name in ("lat", "lon") if name not in ds.coords]
+    if missing:
+        raise SystemExit(f"regrid requires coordinate(s): {missing}")
+    for name in ("lat", "lon"):
+        coord = ds[name]
+        if coord.ndim != 1 or coord.dims != (name,):
+            raise SystemExit(f"regrid requires a 1-D {name!r} coordinate")
+        values = np.asarray(coord.values, dtype=np.float64)
+        if not np.isfinite(values).all():
+            raise SystemExit(f"regrid coordinate {name!r} contains non-finite values")
+
+    lon = np.mod(np.asarray(ds.lon.values, dtype=np.float64), 360.0)
+    ds = ds.assign_coords(lon=lon).sortby("lon").sortby("lat")
+    for name in ("lat", "lon"):
+        values = np.asarray(ds[name].values)
+        if np.unique(values).size != values.size:
+            raise SystemExit(f"regrid coordinate {name!r} contains duplicates")
+    return ds
+
+
+def regrid_dataset(ds, config):
+    """Lazily interpolate a rectilinear dataset onto a named target grid."""
+    if isinstance(config, str):
+        config = {"target": config}
+    if not isinstance(config, dict):
+        raise SystemExit("regrid must be a target name or a mapping")
+    target_name = str(config.get("target", "s2s_1.5deg"))
+    if target_name not in TARGET_GRIDS:
+        raise SystemExit(f"unsupported regrid target: {target_name!r}")
+    default_method = str(config.get("method", "linear"))
+    variable_methods = config.get("variable_methods", {})
+    if not isinstance(variable_methods, dict):
+        raise SystemExit("regrid variable_methods must be a mapping")
+    methods = {str(name): str(method) for name, method in variable_methods.items()}
+    unknown_vars = sorted(set(methods) - set(ds.data_vars))
+    if unknown_vars:
+        raise SystemExit(f"regrid variable_methods variables not found: {unknown_vars}")
+    invalid = sorted({default_method, *methods.values()} - REGRID_METHODS)
+    if invalid:
+        raise SystemExit(f"unsupported regrid method(s): {invalid}; use linear or nearest")
+
+    ds = _prepare_source_grid(ds)
+    target = TARGET_GRIDS[target_name]()
+    source_lat = np.asarray(ds.lat.values, dtype=np.float64)
+    source_lon = np.asarray(ds.lon.values, dtype=np.float64)
+    lat_index = np.searchsorted(source_lat, target["lat"])
+    lon_index = np.searchsorted(source_lon, target["lon"])
+    aligned = (
+        np.all(lat_index < source_lat.size)
+        and np.all(lon_index < source_lon.size)
+        and np.allclose(source_lat[lat_index], target["lat"], rtol=0.0, atol=1e-10)
+        and np.allclose(source_lon[lon_index], target["lon"], rtol=0.0, atol=1e-10)
+    )
+    if aligned:
+        # Standard 0.25-degree ERA5 contains every 1.5-degree target point.
+        # Indexing is exact, lazy, and avoids loading SciPy for interpolation.
+        result = ds.isel(lat=lat_index, lon=lon_index).assign_coords(target)
+        return result
+
+    grouped: dict[str, list[str]] = {}
+    for name in ds.data_vars:
+        grouped.setdefault(methods.get(str(name), default_method), []).append(str(name))
+    try:
+        parts = [ds[names].interp(target, method=method) for method, names in grouped.items()]
+    except ModuleNotFoundError as exc:
+        if exc.name == "scipy":
+            raise SystemExit(
+                "regrid requires scipy when the source grid is not exactly aligned "
+                "with s2s_1.5deg"
+            ) from exc
+        raise
+    result = xr.merge(parts, compat="override")
+    result.attrs.update(ds.attrs)
+    if result.sizes.get("lat") != 121 or result.sizes.get("lon") != 240:
+        raise SystemExit("s2s_1.5deg regrid did not produce the required 121 x 240 grid")
+    if not np.array_equal(result.lat.values, target["lat"]) or not np.array_equal(
+        result.lon.values, target["lon"]
+    ):
+        raise SystemExit("s2s_1.5deg output coordinates do not match the target contract")
+    return result
+
+
 def load_steps_config(config: str | None) -> list[dict[str, Any]]:
     if config is None:
         return []
@@ -269,6 +375,8 @@ def apply_steps(ds, steps: list[dict[str, Any]]):
             if func is None:
                 raise SystemExit(f"unsupported resample operator: {operator}")
             ds = func()
+        elif "regrid" in step:
+            ds = regrid_dataset(ds, step["regrid"])
         elif "units" in step:
             for name, factor in step["units"].items():
                 if name not in ds.data_vars:
@@ -325,6 +433,40 @@ def apply_steps(ds, steps: list[dict[str, Any]]):
                 dims.remove(coord)
                 dims.insert(1, coord)
             ds = merged.transpose(*dims).to_dataset(name="data")
+        elif "merge_static" in step:
+            cfg = step["merge_static"]
+            if not isinstance(cfg, dict):
+                raise SystemExit("merge_static must be a mapping")
+            coord = str(cfg.get("coord", "channel"))
+            output_name = str(cfg.get("name", "const"))
+            names = [str(n) for n in cfg.get("order", list(ds.data_vars))]
+            if not names:
+                raise SystemExit("merge_static: no variables to merge")
+            if len(names) != len(set(names)):
+                raise SystemExit("merge_static order contains duplicate variable names")
+            missing = [name for name in names if name not in ds.data_vars]
+            if missing:
+                raise SystemExit(f"merge_static: variables not found: {missing}")
+            fields = []
+            for name in names:
+                field = ds[name]
+                for time_dim in ("time", "valid_time"):
+                    if time_dim in field.dims:
+                        if field.sizes[time_dim] != 1:
+                            raise SystemExit(
+                                f"merge_static: {name!r} has {field.sizes[time_dim]} "
+                                f"values on {time_dim!r}; expected exactly one"
+                            )
+                        field = field.isel({time_dim: 0}, drop=True)
+                extra_dims = [dim for dim in field.dims if dim not in ("lat", "lon")]
+                if extra_dims:
+                    raise SystemExit(f"merge_static: {name!r} has unsupported dims: {extra_dims}")
+                if "lat" not in field.dims or "lon" not in field.dims:
+                    raise SystemExit(f"merge_static: {name!r} must have lat/lon dimensions")
+                fields.append(field.transpose("lat", "lon"))
+            merged = xr.concat(fields, dim=coord).assign_coords({coord: names})
+            merged = merged.transpose(coord, "lat", "lon").reset_coords(drop=True)
+            ds = merged.to_dataset(name=output_name)
         elif "normalize" in step:
             pass  # handled after apply_steps in main (compute stats + write sidecars)
         elif "flatten_step" in step:
@@ -478,11 +620,45 @@ def run_guard(input_paths: list[Path], output_path: Path, overwrite: bool) -> No
         raise SystemExit(f"Zarr write guard refused conversion:\n{detail}") from exc
 
 
+def guard_static_output(input_paths: list[Path], output_path: Path, overwrite: bool) -> None:
+    """Apply the non-destructive path checks used for a static NetCDF write."""
+    output_resolved = output_path.resolve()
+    if output_path.suffix.lower() != ".nc":
+        raise SystemExit("static-netcdf output must use a .nc suffix")
+    if any(path.resolve() == output_resolved for path in input_paths):
+        raise SystemExit("Refusing static conversion with output equal to an input")
+    if output_path.exists() and not overwrite:
+        raise SystemExit(f"Refusing to replace existing static output without --overwrite: {output_path}")
+    if output_path.exists() and not output_path.is_file():
+        raise SystemExit(f"static-netcdf output exists and is not a file: {output_path}")
+
+
+def static_dataarray(ds):
+    """Validate and return a core-compatible static DataArray."""
+    if list(ds.data_vars) != ["const"]:
+        raise SystemExit("static-netcdf requires exactly one data variable named 'const'")
+    da = ds["const"]
+    if da.dims != ("channel", "lat", "lon"):
+        raise SystemExit(
+            "static-netcdf requires const dimensions ('channel', 'lat', 'lon'), "
+            f"got {da.dims}"
+        )
+    if da.sizes["channel"] == 0 or da.sizes["lat"] == 0 or da.sizes["lon"] == 0:
+        raise SystemExit("static-netcdf dimensions must be non-empty")
+    return da
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--input", action="append", default=[], help="input path; repeat for multiple NetCDF files")
     parser.add_argument("--input-glob", default=None, help="glob for a homogeneous NetCDF collection")
-    parser.add_argument("--output", required=True, help="target Zarr store path")
+    parser.add_argument("--output", required=True, help="target Zarr store or static NetCDF path")
+    parser.add_argument(
+        "--output-format",
+        choices=("zarr", "static-netcdf"),
+        default="zarr",
+        help="write the main Zarr store (default) or a core-compatible const.nc",
+    )
     parser.add_argument("--steps-config", default=None, help="JSON/YAML steps config")
     parser.add_argument("--input-chunks", default="time=4", help="lazy input chunks, e.g. time=4")
     parser.add_argument(
@@ -503,6 +679,14 @@ def main(argv: list[str] | None = None) -> int:
 
     steps = load_steps_config(args.steps_config)
     do_normalize = any("normalize" in step for step in steps)
+    do_merge_static = any("merge_static" in step for step in steps)
+    if args.output_format == "static-netcdf":
+        if not do_merge_static:
+            raise SystemExit("static-netcdf output requires a merge_static step")
+        if do_normalize:
+            raise SystemExit("static-netcdf output does not support normalize")
+    elif do_merge_static:
+        raise SystemExit("merge_static requires --output-format static-netcdf")
     try:
         ds = open_inputs(input_paths, input_chunks)
     except Exception as exc:
@@ -519,6 +703,8 @@ def main(argv: list[str] | None = None) -> int:
         before = describe(ds)
         ds = apply_steps(ds, steps)
         ds = canonicalize_latlon(ds)
+        if args.output_format == "static-netcdf":
+            static_dataarray(ds)
         after = describe(ds)
     finally:
         ds.close()
@@ -530,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"steps : {len(steps)} (see config: {args.steps_config})")
     print(f"after : {after['dims']} vars={after['variables']}")
     print(f"output: {output_path}")
+    print(f"output format: {args.output_format}")
     print(f"chunks: input={input_chunks or 'backend'} output={output_chunks or 'backend'}")
     if do_normalize:
         print("normalize: statistics deferred until the guarded write phase")
@@ -542,7 +729,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.ack_risk != GUARD_ACK:
         raise SystemExit(f"Refusing write: --ack-risk must equal {GUARD_ACK}")
 
-    run_guard(input_paths, output_path, args.overwrite)
+    if args.output_format == "zarr":
+        run_guard(input_paths, output_path, args.overwrite)
+    else:
+        guard_static_output(input_paths, output_path, args.overwrite)
 
     # Guard passed; reopen the dataset for the actual write.
     ds = open_inputs(input_paths, input_chunks)
@@ -554,13 +744,17 @@ def main(argv: list[str] | None = None) -> int:
             land_names, ocean_names = normalize_land_ocean(steps)
             weight = channel_weights(names, set(land_names), set(ocean_names))
             ds = normalize_ds(ds, mean, std, coord, names)
-        if output_chunks:
+        if output_chunks and args.output_format == "zarr":
             applicable_chunks = {name: size for name, size in output_chunks.items() if name in ds.dims}
             ds = ds.chunk(applicable_chunks)
-        ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-", consolidated=True)
-        if do_normalize:
-            write_sidecars(output_path, names, mean, std, weight, coord or "channel")
-            print(f"sidecars: mean.nc / std.nc / weight.nc -> {output_path}")
+        if args.output_format == "zarr":
+            ds.to_zarr(str(output_path), mode="w" if args.overwrite else "w-", consolidated=True)
+            if do_normalize:
+                write_sidecars(output_path, names, mean, std, weight, coord or "channel")
+                print(f"sidecars: mean.nc / std.nc / weight.nc -> {output_path}")
+        else:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            static_dataarray(ds).to_netcdf(output_path, mode="w")
     finally:
         ds.close()
     print(f"\nWROTE {output_path}")

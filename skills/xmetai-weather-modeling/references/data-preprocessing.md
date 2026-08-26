@@ -10,6 +10,7 @@ It covers:
 
 - Format detection: extension and magic bytes first, then metadata read.
 - Declarative conversion steps: variable rename, variable selection, time selection, resampling, channel merge.
+- Optional static-field conversion to a core-compatible `const.nc` when the selected model requires it.
 - Guarded conversion to Zarr.
 - Post-conversion validation: hand the converted store to Data analysis, where `inspect_zarr_schema.py` describes the store and the agent judges training readiness against the model contract.
 
@@ -75,9 +76,12 @@ Dry-run conversion plan first; guarded write on approval.
 python convert_to_zarr.py --input in.nc --output out.zarr [--steps-config steps.json]
 python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr [--input-chunks time=4]
 python convert_to_zarr.py --input in.nc --output out.zarr --allow-write --ack-risk I-understand-this-mutates-zarr [--overwrite]
+python convert_to_zarr.py --input static.nc --output const.nc --output-format static-netcdf --steps-config static.json
 ```
 
-The write path requires the Zarr write guard and explicit approval flags. Inputs: NetCDF (classic/NetCDF-4), Zarr, or GRIB (multi-variable mixed-edition GRIB is read per variable automatically). Output: Zarr store only.
+The write path requires explicit approval flags; Zarr output additionally runs the Zarr write guard. Inputs: NetCDF (classic/NetCDF-4), Zarr, or GRIB (multi-variable mixed-edition GRIB is read per variable automatically). Outputs are a main Zarr store or, in static mode, one `const.nc` file.
+
+Static conversion uses the same dry-run and explicit write acknowledgement. With `--output-format static-netcdf`, a `merge_static` step writes a single core-compatible `const(channel, lat, lon)` DataArray instead of a Zarr store. Existing files are never replaced unless `--overwrite` is supplied.
 
 Repeat `--input` or use `--input-glob` for a homogeneous NetCDF collection. Multi-file inputs are opened lazily with `open_mfdataset(combine="by_coords")`; file opening is serial for Windows netCDF4/HDF5 safety, while downstream Dask reductions and writes remain chunked. Dry-run inspects metadata and the planned transforms only; it deliberately defers full-data normalization statistics until the guarded write phase. Use `--input-chunks` and `--output-chunks` to control memory and I/O. The default output layout keeps one time step per chunk and complete channel/spatial dimensions, matching full-field weather-model reads without loading the whole time series.
 
@@ -111,6 +115,8 @@ JSON or YAML. Unknown steps abort the plan.
     {"keep_vars": ["z", "t", "q"]},
     {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
     {"resample": {"freq": "6h", "operator": "mean"}},
+    {"regrid": {"target": "s2s_1.5deg", "method": "linear", "variable_methods": {"lsm": "nearest"}}},
+    {"merge_static": {"order": ["z", "lsm"], "coord": "channel", "name": "const"}},
     {"units": {"q": 1000, "tp": 1000, "ttr": 1 / 3600}},
     {"log1p": ["tp"]},
     {"split_levels": {"vars": ["z", "t", "u", "v", "q"], "level_coord": "pressure_level"}},
@@ -125,6 +131,10 @@ JSON or YAML. Unknown steps abort the plan.
 Precipitation unit convention: precipitation channels are normalized to **mm accumulated values** before `log1p`/`normalize`. ERA5 and ERA5-Land deliver `tp` in metres (step-accumulated), so the steps config multiplies it by 1000 (`"tp": 1000`); rate-form precipitation (`kg m-2 s-1`, `mm/h` averages, or `mm/s`) must first be multiplied by the accumulation length in seconds. The accumulation window must follow the selected model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models) and must be recorded in the download plan so a given data source's original unit and window can be verified.
 
 Output Zarr stores always use `lat`/`lon` as the grid coordinate names; CDS inputs carrying `latitude`/`longitude` are renamed automatically. This matches the core dataset classes, which access `ds.lat`/`ds.lon` directly (for example `GraphCastDataset` and the `MultiZarrDataset` bbox path).
+
+`regrid` converts rectilinear ERA5 grids to a named model grid before channel merging and normalization. The `s2s_1.5deg` target is fixed to descending latitude `90, 88.5, ..., -90` (121 points) and longitude `0, 1.5, ..., 358.5` (240 points), matching the `cla.zarr` spatial contract. Source longitudes in `-180..180` are normalized to `0..360`; source latitude and longitude coordinates must be one-dimensional and unique. Standard ERA5 0.25-degree data contains every target point, so this aligned case uses exact lazy indexing without SciPy. Non-aligned source grids use xarray interpolation and require SciPy. `method` defaults to `linear` for continuous fields; use `variable_methods` with `nearest` for categorical fields such as land masks or soil type. Run this step before `merge_to_data` and `normalize`. Conservative remapping is not provided, so precipitation remapping must not be described as area-conservative.
+
+`merge_static` is used only with `--output-format static-netcdf`. It selects static variables in the configured order, requires every `time` or `valid_time` dimension to contain exactly one value, removes that singleton dimension, and writes `const(channel, lat, lon)`. It rejects duplicate or missing variables, additional dimensions, an empty output, and normalization. Choose variable-specific regridding before this step (`linear` for continuous terrain/geopotential and `nearest` for categorical masks). The number and order of output channels must follow the selected model's `const_chans` contract; models with `const_chans=0` do not need this conversion.
 
 `normalize` computes per-channel `mean`/`std` (and level-scaled `weight`, with optional land/ocean corrections via `{"normalize": {"land_names": [...], "ocean_names": [...]}}`) from the prepared data, stores `(x - mean) / std` values in the Zarr, and writes `mean.nc` / `std.nc` / `weight.nc` next to the output Zarr. Source NaN values are preserved (for example ERA5-Land non-land pixels); the core dataset classes replace them with 0 via `torch.nan_to_num`. The same weight convention (level-scaled plus optional land/ocean) is used by `compute_sidecars.py` and `merge_normalize.py`.
 

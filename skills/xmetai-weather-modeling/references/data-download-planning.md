@@ -1,12 +1,14 @@
 # Data Download Planning
 
-Use this reference only for extracting meteorological data requirements and producing a plan before any download or data write begins.
+Use this reference only for extracting meteorological data requirements and producing a plan before any download or data write begins. It governs the planning stage; it does not prohibit a later, explicitly confirmed download.
 
 ## Scope
 
 This route answers: **What data does the selected config require, where may it come from, and what must be confirmed before downloading it?**
 
-Do not download, create, convert, aggregate, regrid, normalize, append, overwrite, or otherwise modify data. Do not generate statistics or claim that a dataset is ready for training.
+During this planning stage, do not download, create, convert, aggregate, regrid, normalize, append, overwrite, or otherwise modify data. Do not generate statistics or claim that a dataset is ready for training.
+
+After the user explicitly confirms the plan and asks to proceed, this planning stage is complete. Return to the main skill routing: the model may use its native capabilities to write a suitable downloader, read local configuration, use locally configured credentials without exposing or copying them, and execute only the confirmed download. No downloader needs to be bundled with this skill. Do not treat the planning-stage stop rule as a permanent ban on execution.
 
 Use **Data analysis** instead when data already exists and the task is to inspect schema, integrity, time gaps, values, statistics, static fields, or training readiness.
 
@@ -20,7 +22,10 @@ Use **Data analysis** instead when data already exists and the task is to inspec
 6. Identify the documented or proposed data source, license, authentication method, and variable-name mapping.
 7. Record the destination, estimated size when known, and existing-file policy.
 8. Produce a Markdown, YAML, or JSON pre-download plan.
-9. Stop before any network request or filesystem write.
+9. Stop before any network request or filesystem write and ask the user to confirm the download list.
+10. If the user later confirms the list and asks to proceed, exit this planning route. Execute the confirmed download with the model's native capabilities; do not continue applying this reference's no-write restriction to that execution turn.
+
+Confirmation covers only the planned source, variables, time range, destination, estimated size, authentication mechanism, and existing-file policy. If execution would materially change any of them, update the plan and obtain confirmation again. Download completion does not authorize conversion, normalization, statistics generation, Zarr mutation, or training-readiness claims.
 
 ## Requirement Extraction
 
@@ -76,7 +81,103 @@ When the user selects more than one entry config, produce a multi-config plan in
 - Label statistics and static files as required only when the selected runtime path enforces them; otherwise describe them as optional or pending confirmation.
 - Do not claim that resizing, cropping, regridding, aggregation, normalization, or unit conversion is implemented unless the executing code path was traced.
 - A README instruction to contact the author establishes the documented acquisition method, but does not prove that data is private, restricted, or unavailable elsewhere.
-- When channel names come from a Zarr coordinate dynamically, report only explicitly enforced channels as confirmed. Keep the complete list and order pending until an authoritative schema or manifest is available.
+- When channel names come from a Zarr coordinate dynamically, report only explicitly enforced channels as confirmed unless this reference provides an authoritative default manifest for the selected dataset family. For S2S C76, use the default manifest below when the user has not requested a custom channel configuration; do not mark its list or order as pending merely because the runtime reads the Zarr coordinate dynamically.
+
+### Default S2S C76 Channel Manifest
+
+The default S2S channel configuration is the 76-channel order verified against the reference `cla.zarr` climate dataset and implemented by the preprocessing tools. Use it for S2S download plans unless the selected config explicitly enforces a different contract or the user requests a custom channel list/order.
+
+Pressure-level channels are variable-major. Within each variable, pressure decreases from 1000 to 50 hPa. The complete ordered manifest is:
+
+```yaml
+channel_profile: s2s_c76_default
+channels:
+  - z1000
+  - z925
+  - z850
+  - z700
+  - z600
+  - z500
+  - z400
+  - z300
+  - z250
+  - z200
+  - z150
+  - z100
+  - z50
+  - t1000
+  - t925
+  - t850
+  - t700
+  - t600
+  - t500
+  - t400
+  - t300
+  - t250
+  - t200
+  - t150
+  - t100
+  - t50
+  - u1000
+  - u925
+  - u850
+  - u700
+  - u600
+  - u500
+  - u400
+  - u300
+  - u250
+  - u200
+  - u150
+  - u100
+  - u50
+  - v1000
+  - v925
+  - v850
+  - v700
+  - v600
+  - v500
+  - v400
+  - v300
+  - v250
+  - v200
+  - v150
+  - v100
+  - v50
+  - q1000
+  - q925
+  - q850
+  - q700
+  - q600
+  - q500
+  - q400
+  - q300
+  - q250
+  - q200
+  - q150
+  - q100
+  - q50
+  - t2m
+  - d2m
+  - sst
+  - ttr
+  - 10u
+  - 10v
+  - 100u
+  - 100v
+  - msl
+  - tcwv
+  - tp
+```
+
+In every S2S pre-download plan:
+
+- State that `s2s_c76_default` will be used when the user has not supplied a channel override.
+- Show the complete ordered manifest to the user before download, not only `5 variables x 13 levels + 11 surface channels`.
+- Tell the user that they may keep the default or provide a custom channel list and exact order.
+- Treat an explicit user order as authoritative and preserve it through download mapping and conversion.
+- Warn that changing the channel count or order changes the data/model contract and may make existing checkpoints, normalization sidecars, or reference datasets incompatible.
+- Do not block a download solely to reconfirm the default C76 order. Other unresolved requirements, such as source, units, accumulation windows, time coverage, destination, or overwrite policy, may still block execution.
 
 ## Pre-Download Plan
 
@@ -182,4 +283,4 @@ Pending confirmation (blocking items only)
 Next step
 ```
 
-End by stating that no download, conversion, file creation, or data modification was performed. Do not report file integrity, schema validation, or training readiness under this route; hand those tasks to Data analysis after data exists.
+For the planning response, end by stating that no download, conversion, file creation, or data modification was performed and ask the user to confirm the listed download before execution. This statement applies only to the planning response. Once the user confirms and asks to proceed, exit this route rather than repeating it. Do not report file integrity, schema validation, or training readiness under the planning route; hand those tasks to Data analysis after data exists.

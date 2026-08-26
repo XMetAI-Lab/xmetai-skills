@@ -39,7 +39,9 @@ metadata:
 
 - Use data analysis when existing Zarr, NetCDF, or static data needs read-only inspection, comparison, or validation.
 - Use data download planning when data is missing and the task is to extract requirements, identify a source, or produce a pre-download plan.
-- Data download planning stops before network requests, file creation, conversion, statistics generation, Zarr writes, or training-readiness validation.
+- Data download planning stops before network requests or file creation and presents the download list for confirmation. This restriction applies to the planning stage, not permanently to the user's download request.
+- When the user explicitly confirms the planned data source, variables, time range, destination, estimated size, existing-file policy, and asks to proceed, the planning stage is complete. Exit the planning route and use the model's native coding, shell, network, and local-configuration capabilities to create an appropriate downloader and execute only the confirmed download. The skill does not need to provide a bundled downloader.
+- A confirmation authorizes only the listed download. Material changes to its source, variables, time range, destination, estimated size, or overwrite behavior require an updated plan and confirmation. Conversion, statistics generation, Zarr writes, and training-readiness validation remain separate stages with their own routing and write safeguards.
 - Use data preprocessing when downloaded data exists and needs format detection, normalization, conversion, or post-conversion validation.
 - Use data analysis when data already exists and needs schema, integrity, quality, statistics, or training-readiness checks.
 

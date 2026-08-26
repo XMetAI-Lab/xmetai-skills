@@ -80,3 +80,76 @@ def test_normalize_ds_stays_lazy() -> None:
     normalized = convert.normalize_ds(ds, np.array([1.0, 2.0]), np.array([2.0, 4.0]), "level", ["a", "b"])
 
     assert hasattr(normalized["data"].data, "chunks")
+
+
+def test_regrid_era5_quarter_degree_to_exact_s2s_grid_stays_lazy() -> None:
+    lat = np.linspace(90.0, -90.0, 721)
+    lon = np.arange(-180.0, 180.0, 0.25)
+    values = (
+        lat[:, None].astype(np.float32) + np.mod(lon[None, :], 360.0).astype(np.float32)
+    )[None, ...]
+    ds = xr.Dataset(
+        {"t2m": (("time", "latitude", "longitude"), values)},
+        coords={"time": [0], "latitude": lat, "longitude": lon},
+    ).chunk({"time": 1, "latitude": 181, "longitude": 360})
+
+    result = convert.apply_steps(ds, [{"regrid": {"target": "s2s_1.5deg"}}])
+
+    assert result.sizes["lat"] == 121
+    assert result.sizes["lon"] == 240
+    np.testing.assert_array_equal(result.lat.values, np.linspace(90.0, -90.0, 121))
+    np.testing.assert_array_equal(result.lon.values, np.arange(240) * 1.5)
+    assert hasattr(result["t2m"].data, "chunks")
+    np.testing.assert_allclose(result.t2m.isel(time=0, lat=60, lon=120).compute(), 180.0)
+
+
+def test_regrid_supports_nearest_per_variable_and_rejects_bad_method() -> None:
+    lat = np.linspace(90.0, -90.0, 361)
+    lon = np.arange(0.0, 360.0, 0.5)
+    ds = xr.Dataset(
+        {
+            "t2m": (("lat", "lon"), lat[:, None] + lon[None, :]),
+            "lsm": (("lat", "lon"), np.broadcast_to((lon >= 180.0).astype(np.int8), (361, 720))),
+        },
+        coords={"lat": lat, "lon": lon},
+    )
+
+    result = convert.regrid_dataset(
+        ds,
+        {"target": "s2s_1.5deg", "method": "linear", "variable_methods": {"lsm": "nearest"}},
+    )
+
+    assert set(np.unique(result.lsm.values)) <= {0, 1}
+    with pytest.raises(SystemExit, match="unsupported regrid method"):
+        convert.regrid_dataset(ds, {"method": "conservative"})
+
+
+def test_merge_static_removes_single_time_and_preserves_order() -> None:
+    ds = xr.Dataset(
+        {
+            "z": (("valid_time", "lat", "lon"), [[[1.0, 2.0], [3.0, 4.0]]]),
+            "lsm": (("valid_time", "lat", "lon"), [[[0.0, 1.0], [0.0, 1.0]]]),
+        },
+        coords={"valid_time": [np.datetime64("2015-01-01")], "lat": [1.0, 0.0], "lon": [0.0, 1.0]},
+    )
+
+    result = convert.apply_steps(
+        ds,
+        [{"merge_static": {"order": ["z", "lsm"], "coord": "channel", "name": "const"}}],
+    )
+
+    assert list(result.data_vars) == ["const"]
+    assert result.const.dims == ("channel", "lat", "lon")
+    assert result.channel.values.tolist() == ["z", "lsm"]
+    np.testing.assert_allclose(result.const.values[0], [[1.0, 2.0], [3.0, 4.0]])
+    assert convert.static_dataarray(result).name == "const"
+
+
+def test_merge_static_rejects_multiple_time_values() -> None:
+    ds = xr.Dataset(
+        {"z": (("time", "lat", "lon"), np.ones((2, 1, 1), dtype=np.float32))},
+        coords={"time": [0, 1], "lat": [0.0], "lon": [0.0]},
+    )
+
+    with pytest.raises(SystemExit, match="expected exactly one"):
+        convert.apply_steps(ds, [{"merge_static": {"order": ["z"]}}])
