@@ -54,6 +54,8 @@ metadata:
 - `inspect_data_format.py`: read-only format detection and metadata summary.
 - `check_config_contract.py`, `summarize_lazy_config.py`: config checks.
 - `build_train_command.py`: print train/eval/export command only.
+- `setup_s2s_vit_smoke_wsl.sh`: create the isolated Python/CUDA environment used by the WSL S2S smoke test.
+- `run_s2s_vit_smoke_wsl.sh`: run a small standalone C76 ViT train/eval smoke test in WSL without editing core.
 - `check_onnx_io.py`: ONNX IO summary.
 - `zarr_write_guard.py`: mandatory guard for future write scripts.
 - `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr to Zarr.

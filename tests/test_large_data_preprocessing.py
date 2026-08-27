@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +18,23 @@ SPEC = importlib.util.spec_from_file_location("convert_to_zarr", SCRIPT)
 assert SPEC and SPEC.loader
 convert = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(convert)
+
+
+def test_split_cli_dry_run(tmp_path: Path) -> None:
+    source = tmp_path / "input.nc"
+    xr.Dataset(
+        {"x": (("time", "lat", "lon"), np.ones((1, 1, 1), dtype=np.float32))},
+        coords={"time": [np.datetime64("2023-01-01")], "lat": [0.0], "lon": [0.0]},
+    ).to_netcdf(source)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--input", str(source), "--output", str(tmp_path / "out.zarr")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "DRY-RUN: nothing was written" in result.stdout
+    assert not (tmp_path / "out.zarr").exists()
 
 
 def test_parse_chunks() -> None:
@@ -185,6 +204,55 @@ def test_file_period_overlap_preserves_daily_window_across_boundary(tmp_path: Pa
         np.array(["2023-07-01", "2023-07-02"], dtype="datetime64[ns]"),
     )
     np.testing.assert_allclose(combined.acc.values, [24.0, 24.0])
+
+
+def test_file_period_overlap_does_not_emit_incomplete_lookahead_state(tmp_path: Path) -> None:
+    xr.Dataset(
+        {"state": (("time",), np.array([30.0, 31.0], dtype=np.float32))},
+        coords={"time": np.array(["2023-07-30", "2023-07-31"], dtype="datetime64[ns]")},
+    ).to_netcdf(tmp_path / "state-202307.nc")
+    xr.Dataset(
+        {"state": (("time",), np.array([1.0, 2.0], dtype=np.float32))},
+        coords={"time": np.array(["2023-08-01", "2023-08-02"], dtype="datetime64[ns]")},
+    ).to_netcdf(tmp_path / "state-202308.nc")
+
+    july_hours = np.arange(
+        np.datetime64("2023-07-30T00"),
+        np.datetime64("2023-08-01T00"),
+        np.timedelta64(1, "h"),
+    )
+    august_hours = np.arange(
+        np.datetime64("2023-08-01T00"),
+        np.datetime64("2023-08-03T00"),
+        np.timedelta64(1, "h"),
+    )
+    xr.Dataset(
+        {"acc": (("time",), np.ones(july_hours.size, dtype=np.float32))},
+        coords={"time": july_hours},
+    ).to_netcdf(tmp_path / "acc-202307.nc")
+    xr.Dataset(
+        {"acc": (("time",), np.full(august_hours.size, 2.0, dtype=np.float32))},
+        coords={"time": august_hours},
+    ).to_netcdf(tmp_path / "acc-202308.nc")
+
+    loaded = []
+    for batch, _ in convert.prepared_file_batches(
+        sorted(tmp_path.glob("*.nc")),
+        period_batch_size=1,
+        overlap_periods=1,
+        chunks={"time": 6},
+        steps=[{"daily_aggregation": {"variables": {"acc": {"operator": "sum"}}}}],
+    ):
+        loaded.append(batch.load())
+
+    combined = xr.concat(loaded, dim="time")
+    np.testing.assert_array_equal(
+        combined.time.values,
+        np.array(["2023-07-31", "2023-08-01", "2023-08-02"], dtype="datetime64[ns]"),
+    )
+    np.testing.assert_allclose(combined.state.values, [31.0, 1.0, 2.0])
+    np.testing.assert_allclose(combined.acc.values, [24.0, 25.0, 48.0])
+    assert np.isfinite(combined.acc.values).all()
 
 
 def test_normalize_ds_stays_lazy() -> None:

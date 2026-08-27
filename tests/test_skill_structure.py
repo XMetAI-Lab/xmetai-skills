@@ -120,6 +120,20 @@ def test_convert_grib_fallback_and_layout() -> None:
     assert "flatten_step" in script
     assert "shortName" in script
     assert "filter_by_keys" in script
+    conversion = SKILL / "scripts" / "conversion"
+    assert {
+        "inputs.py",
+        "grid.py",
+        "temporal.py",
+        "transforms.py",
+        "batching.py",
+        "statistics.py",
+        "state.py",
+        "writers.py",
+        "static.py",
+    } <= {path.name for path in conversion.glob("*.py")}
+    state = (conversion / "state.py").read_text(encoding="utf-8")
+    assert 'parent.parent / "zarr_write_guard.py"' in state
     insp = (SKILL / "scripts" / "inspect_data_format.py").read_text(encoding="utf-8")
     assert "indexpath" in insp
     text = (SKILL / "references" / "data-preprocessing.md").read_text(encoding="utf-8")
@@ -135,6 +149,37 @@ def test_convert_grib_fallback_and_layout() -> None:
     assert "indexpath" in text
     plan = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
     assert "Print download scripts" in plan
+
+
+def test_evaluation_scripts_are_split_behind_stable_facades() -> None:
+    scripts = SKILL / "scripts"
+    evaluate = (scripts / "evaluate_pred.py").read_text(encoding="utf-8")
+    visualize = (scripts / "visualize_eval.py").read_text(encoding="utf-8")
+    assert "from evaluation.runner import compute_all_metrics" in evaluate
+    assert "from evaluation.visualization.maps import" in visualize
+
+    package = scripts / "evaluation"
+    expected = {
+        "io.py",
+        "common.py",
+        "runner.py",
+        "report.py",
+        "metrics/rmse.py",
+        "metrics/contingency.py",
+        "metrics/tcc.py",
+        "metrics/ps.py",
+        "metrics/ips.py",
+        "visualization/common.py",
+        "visualization/maps.py",
+        "visualization/composite.py",
+        "visualization/curves.py",
+        "visualization/animation.py",
+    }
+    actual = {
+        path.relative_to(package).as_posix()
+        for path in package.rglob("*.py")
+    }
+    assert expected <= actual
 
 
 def test_sidecar_generation_documented() -> None:

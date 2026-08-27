@@ -75,6 +75,8 @@ contract: `reset()`, `process(inputs, outputs)`, `evaluate()`.
 
 ## Offline Evaluation (`scripts/evaluate_pred.py`)
 
+`evaluate_pred.py` remains the stable CLI and compatibility facade. Reusable implementation lives under `scripts/evaluation/`: `io.py` owns paired-file loading, `common.py` owns shared numerical helpers, `metrics/` contains one module per metric family, `runner.py` coordinates cross-initialization aggregation, and `report.py` formats console output. Extend a metric in its own module without adding scientific logic to the CLI.
+
 The offline script reads `pred_*.nc` / `obs_*.nc` directly — no denormalization
 is needed because files already contain physical values. It currently provides:
 
@@ -96,6 +98,8 @@ Metric parity notes:
   already in mm after `inv_normalize`, so thresholds are 0.1/10/25/50 mm/day.
 
 ## Evaluation Visualization (`scripts/visualize_eval.py`)
+
+`visualize_eval.py` remains the visualization CLI. Rendering code is separated under `scripts/evaluation/visualization/` into shared map primitives, comparison maps, multi-init composites, metric curves, and GIF animation. Plot modules consume the evaluation report contract rather than implementing metric formulas.
 
 Renders figures from the same paired files:
 

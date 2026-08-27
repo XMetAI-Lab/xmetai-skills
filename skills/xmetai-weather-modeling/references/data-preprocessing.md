@@ -65,6 +65,8 @@ python convert_to_zarr.py --input static.nc --output const.nc --output-format st
 
 Inputs are NetCDF, Zarr, or supported GRIB. Writes require explicit approval flags; Zarr also runs the write guard. Static mode writes `const(channel, lat, lon)` and existing outputs require `--overwrite`.
 
+`convert_to_zarr.py` is the stable CLI and compatibility facade. Its reusable implementation is split under `scripts/conversion/` by responsibility: input opening, grid handling, temporal aggregation, configured transforms, bounded batching, streaming statistics, resume state, Zarr/sidecar writers, and static fields. Add dataset-specific behavior to the narrowest module while keeping the CLI and declarative steps contract stable.
+
 Repeat `--input` or use `--input-glob` for a homogeneous NetCDF collection. Multi-file inputs are opened lazily with `open_mfdataset(combine="by_coords")`; file opening is serial for Windows netCDF4/HDF5 safety, while downstream Dask reductions and writes remain chunked. Dry-run inspects metadata and the planned transforms only; it deliberately defers full-data normalization statistics until the guarded write phase. Use `--input-chunks` and `--output-chunks` to control memory and I/O. The default output layout keeps one time step per chunk and complete channel/spatial dimensions, matching full-field weather-model reads without loading the whole time series.
 
 NetCDF-4/HDF5 inputs use `h5netcdf` when it is installed, including the one-file-at-a-time catalog pass and later multi-file batches. This avoids observed Windows netCDF4/HDF5 failures when a file is closed after metadata inspection and reopened for statistics. Classic CDF inputs retain the compatible netCDF4/xarray fallback; do not force `h5netcdf` for every `.nc` extension.
