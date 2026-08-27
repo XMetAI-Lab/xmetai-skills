@@ -1,6 +1,6 @@
 # xmetai-skills
 
-Agent skills for XMetAI-style weather model work, including workspace inspection, meteorological data requirement extraction and pre-download planning, LazyConfig review, Zarr/NetCDF/static-data checks, model-shape debugging, training/evaluation operations, ONNX export, and deployment review.
+Agent skills for XMetAI-style weather model work, including workspace inspection, meteorological data requirement extraction and confirmed-download execution, large-scale data conversion, LazyConfig review, Zarr/NetCDF/static-data checks, offline evaluation and visualization, model-shape debugging, training operations, ONNX export, and deployment review.
 
 The installable skill is:
 
@@ -65,8 +65,10 @@ The tests check that the skill entrypoint, references, agent metadata, and helpe
 Open the target weather-model repository, then ask the agent to use `xmetai-weather-modeling` for one of these task types:
 
 - LazyConfig creation or review.
-- Meteorological data requirement extraction and pre-download planning without downloading or writing data.
+- Meteorological data requirement extraction and pre-download planning, followed by confirmed download execution when requested.
+- Guarded NetCDF/Zarr/GRIB conversion, regridding, normalization sidecars, static fields, and resumable large-data processing.
 - Zarr, NetCDF, static-data, and dataset-contract inspection.
+- Offline RMSE/TS/POD/FAR/FB/TCC/PS/IPS evaluation and result visualization.
 - Model contract review and tensor-shape debugging.
 - Training, evaluation, experiment reporting, ONNX export, and deployment checks.
 
@@ -76,6 +78,8 @@ Typical read-only helper commands:
 python skills/xmetai-weather-modeling/scripts/inspect_workspace.py /path/to/xmetai-core
 python skills/xmetai-weather-modeling/scripts/check_config_contract.py /path/to/config.py
 python skills/xmetai-weather-modeling/scripts/inspect_static_nc.py /path/to/static.nc
+python skills/xmetai-weather-modeling/scripts/convert_to_zarr.py --input in.nc --output out.zarr
+python skills/xmetai-weather-modeling/scripts/evaluate_pred.py --pred-dir /path/to/pred
 ```
 
 Start with `skills/xmetai-weather-modeling/SKILL.md`; it routes the agent to the right reference document and script for the task.
@@ -87,7 +91,7 @@ skills/xmetai-weather-modeling/
   SKILL.md                 Main skill entrypoint.
   agents/openai.yaml       Agent metadata.
   references/              Detailed task guidance.
-  scripts/                 Small read-only inspection and validation CLIs.
+  scripts/                 Inspection, guarded conversion, evaluation, and visualization CLIs.
   assets/templates/        Review, report, and planning templates.
 docs/                      Website documentation pages.
 tests/                     Structure and script-compilation tests.

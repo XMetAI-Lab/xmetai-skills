@@ -54,15 +54,13 @@ metadata:
 - `inspect_data_format.py`: read-only format detection and metadata summary.
 - `check_config_contract.py`, `summarize_lazy_config.py`: config checks.
 - `build_train_command.py`: print train/eval/export command only.
-- `setup_s2s_vit_smoke_wsl.sh`: create the isolated Python/CUDA environment used by the WSL S2S smoke test.
-- `run_s2s_vit_smoke_wsl.sh`: run a small standalone C76 ViT train/eval smoke test in WSL without editing core.
 - `check_onnx_io.py`: ONNX IO summary.
 - `zarr_write_guard.py`: mandatory guard for future write scripts.
-- `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr to Zarr.
+- `convert_to_zarr.py`: dry-run conversion plan, then guarded NetCDF/Zarr/GRIB conversion, including bounded multi-file processing, regridding, temporal aggregation, static fields, and resumable Zarr writes.
 - `compute_sidecars.py`: per-channel mean/std/weight sidecar generation.
 - `merge_normalize.py`: merge multiple Zarr stores and normalize them as one dataset.
 - `evaluate_pred.py`: offline RMSE / threshold metrics (TS, POD, FAR, FB) / TCC (Temporal Correlation Coefficient) / PS (Climate Business PS Score) / IPS (Integrated Pattern Score) from `pred_*.nc` / `obs_*.nc`.
-- `visualize_eval.py`: map compare/error/pred panels, multi-init composite error (mean bias + RMSE), RMSE/TS/TCC curves, threshold metric plots.
+- `visualize_eval.py`: map compare/error/pred panels, GIFs, regional crops, multi-init composite error, RMSE/TS/TCC/PS/IPS curves, threshold plots, and climate-score summaries.
 - `collect_experiment_report.py`: lightweight report.
 
 ## Validation Posture

@@ -52,10 +52,10 @@ def test_data_requirement_evidence_rules() -> None:
     assert "optional or pending items as mandatory downloads" in text
     assert "Do not merge requirements" in text
     assert "main dataset open path separately from sidecar-loading helpers" in text
-    assert "Do not download" in text
+    assert "After confirmation, exit this route" in text
     assert "Data analysis" in text
     assert "code path wins" in text
-    assert "Normalization convention" in text
+    assert "normalization storage convention" in text
 
 
 def test_data_download_plan_template() -> None:
@@ -79,10 +79,10 @@ def test_data_download_plan_template() -> None:
     assert "## Next Step" in text
     reference = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
     assert "assets/templates/data_download_plan.md" in reference
-    assert "Bottom line" in reference
+    assert "Keep the printed plan short" in reference
     assert "evidence" in reference
-    assert "inference configs" in reference
-    assert "Static fields and statistics sidecars" in reference
+    assert "inference configs" in reference.lower()
+    assert "Statistics sidecars (`mean`, `std`, `weight`) are computed" in reference
     assert "## Static Fields Acquisition" in reference
 
 
@@ -141,14 +141,16 @@ def test_convert_grib_fallback_and_layout() -> None:
     assert "split_levels" in text
     assert "Normalization Convention" in text
     assert "log-transformed" in text
-    assert "mean/std/weight.npy" in text
-    assert "Training vs Inference Data Forms" in text
-    assert "Exported ONNX" in text
-    assert "Do not assume this pattern holds for every model" in text
+    assert "mean.nc" in text
+    assert "std.nc" in text
+    assert "weight.nc" in text
+    assert "Training consumes normalized Zarr values directly" in text
+    assert "exported ONNX" in text
+    assert "verify the selected model's export/inference path" in text
     assert "Directory Layout" in text
     assert "indexpath" in text
     plan = (SKILL / "references" / "data-download-planning.md").read_text(encoding="utf-8")
-    assert "Print download scripts" in plan
+    assert "Print scripts/configs instead of saving them" in plan
 
 
 def test_evaluation_scripts_are_split_behind_stable_facades() -> None:
@@ -190,7 +192,7 @@ def test_sidecar_generation_documented() -> None:
     assert "compute_sidecars.py" in text
     assert "before normalization" in text
     assert "zero variance" in text
-    assert "Static fields are prepared separately" in text
+    assert "Prepare required static fields separately as `const.nc`" in text
     assert "merge_normalize.py" in text
 
 

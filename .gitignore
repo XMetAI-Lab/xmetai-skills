@@ -12,11 +12,3 @@ venv/
 output/
 reports/
 *.log
-tests/data/
-
-# WorkBuddy skill import metadata (keep out of repo)
-_user_meta.json
-
-# Development references (not for distribution)
-skills/xmetai-weather-modeling/references/evaluation-visualization-plan.md
-
