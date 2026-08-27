@@ -24,6 +24,22 @@ def test_parse_chunks() -> None:
         convert.parse_chunks("time=0")
 
 
+def test_netcdf_engine_prefers_h5netcdf_for_hdf5(tmp_path: Path) -> None:
+    path = tmp_path / "sample.nc"
+    xr.Dataset({"x": (("time",), [1.0])}, coords={"time": [0]}).to_netcdf(
+        path, engine="h5netcdf"
+    )
+    assert convert.netcdf_engine_for([path]) == "h5netcdf"
+
+
+def test_netcdf_engine_keeps_classic_compatible(tmp_path: Path) -> None:
+    path = tmp_path / "classic.nc"
+    xr.Dataset({"x": (("time",), [1.0])}, coords={"time": [0]}).to_netcdf(
+        path, engine="netcdf4", format="NETCDF3_CLASSIC"
+    )
+    assert convert.netcdf_engine_for([path]) in {"netcdf4", None}
+
+
 def test_default_channel_order_matches_cla_and_keeps_flexible_extras() -> None:
     incoming = ["tp", "custom", "z50", "t2m", "z1000"]
     assert convert.default_channel_order(incoming) == ["z1000", "z50", "t2m", "tp", "custom"]
@@ -70,6 +86,107 @@ def test_vectorized_channel_stats_preserve_order_and_nan_policy() -> None:
     np.testing.assert_allclose(std, [np.std([1.0, 2.0, 3.0, 4.0]), np.std([10.0, 20.0, 30.0])])
 
 
+def test_streaming_chan_statistics_match_full_reduction() -> None:
+    values = np.array(
+        [
+            [[1.0, np.nan], [10.0, 20.0]],
+            [[3.0, 5.0], [30.0, 40.0]],
+            [[7.0, 9.0], [50.0, np.nan]],
+        ],
+        dtype=np.float32,
+    )
+    ds = xr.Dataset(
+        {"data": (("time", "level", "point"), values)},
+        coords={"time": np.arange(3), "level": ["a", "b"]},
+    ).chunk({"time": 1})
+    left = convert.channel_moments(ds.isel(time=slice(0, 1)))
+    right = convert.channel_moments(ds.isel(time=slice(1, None)))
+    names, mean, std, coord = convert.finalize_channel_moments(
+        convert.merge_channel_moments(left, right)
+    )
+    full_names, full_mean, full_std, full_coord = convert.compute_channel_stats(ds)
+    assert (names, coord) == (full_names, full_coord)
+    np.testing.assert_allclose(mean, full_mean, rtol=1e-6)
+    np.testing.assert_allclose(std, full_std, rtol=1e-6)
+
+
+def test_streaming_moments_ignore_empty_batch_without_nan_poisoning() -> None:
+    empty = xr.Dataset(
+        {"data": (("time", "level"), np.array([[np.nan]], dtype=np.float32))},
+        coords={"time": [0], "level": ["tp"]},
+    )
+    valid = xr.Dataset(
+        {"data": (("time", "level"), np.array([[1.0], [3.0]], dtype=np.float32))},
+        coords={"time": [1, 2], "level": ["tp"]},
+    )
+    merged = convert.merge_channel_moments(
+        convert.channel_moments(empty), convert.channel_moments(valid)
+    )
+    names, mean, std, _ = convert.finalize_channel_moments(merged)
+    assert names == ["tp"]
+    np.testing.assert_allclose(mean, [2.0])
+    np.testing.assert_allclose(std, [1.0])
+
+    with pytest.raises(SystemExit, match="no valid samples"):
+        convert.finalize_channel_moments(convert.channel_moments(empty))
+
+
+def test_file_period_batches_bound_open_files_and_preserve_times(tmp_path: Path) -> None:
+    for day in range(4):
+        times = np.arange(
+            np.datetime64("2023-01-01T00") + np.timedelta64(day * 24, "h"),
+            np.datetime64("2023-01-01T00") + np.timedelta64((day + 1) * 24, "h"),
+            np.timedelta64(1, "h"),
+        )
+        xr.Dataset(
+            {"x": (("time",), np.full(24, day + 1, dtype=np.float32))},
+            coords={"time": times},
+        ).to_netcdf(tmp_path / f"day-{day}.nc")
+    paths = sorted(tmp_path.glob("*.nc"))
+    loaded = []
+    open_counts = []
+    for batch, open_count in convert.prepared_file_batches(
+        paths,
+        period_batch_size=1,
+        overlap_periods=1,
+        chunks={"time": 6},
+        steps=[],
+    ):
+        loaded.append(batch.load())
+        open_counts.append(open_count)
+    combined = xr.concat(loaded, dim="time")
+    assert combined.sizes["time"] == 96
+    assert max(open_counts) == 3
+    np.testing.assert_array_equal(combined.time.values, np.arange(
+        np.datetime64("2023-01-01T00"), np.datetime64("2023-01-05T00"), np.timedelta64(1, "h")
+    ))
+
+
+def test_file_period_overlap_preserves_daily_window_across_boundary(tmp_path: Path) -> None:
+    for day in range(3):
+        start = np.datetime64("2023-06-30") + np.timedelta64(day, "D")
+        times = np.arange(start, start + np.timedelta64(1, "D"), np.timedelta64(1, "h"))
+        xr.Dataset(
+            {"acc": (("time",), np.ones(24, dtype=np.float32))},
+            coords={"time": times},
+        ).to_netcdf(tmp_path / f"day-{day}.nc")
+    loaded = []
+    for batch, _ in convert.prepared_file_batches(
+        sorted(tmp_path.glob("*.nc")),
+        period_batch_size=1,
+        overlap_periods=1,
+        chunks={"time": 6},
+        steps=[{"daily_aggregation": {"variables": {"acc": {"operator": "sum"}}}}],
+    ):
+        loaded.append(batch.load())
+    combined = xr.concat(loaded, dim="time")
+    np.testing.assert_array_equal(
+        combined.time.values,
+        np.array(["2023-07-01", "2023-07-02"], dtype="datetime64[ns]"),
+    )
+    np.testing.assert_allclose(combined.acc.values, [24.0, 24.0])
+
+
 def test_normalize_ds_stays_lazy() -> None:
     values = np.arange(16, dtype=np.float32).reshape(2, 2, 2, 2)
     ds = xr.Dataset(
@@ -80,6 +197,131 @@ def test_normalize_ds_stays_lazy() -> None:
     normalized = convert.normalize_ds(ds, np.array([1.0, 2.0]), np.array([2.0, 4.0]), "level", ["a", "b"])
 
     assert hasattr(normalized["data"].data, "chunks")
+
+
+def test_weight_sidecar_uses_latitude_not_channels(tmp_path: Path) -> None:
+    latitudes = np.array([90.0, 60.0, 0.0, -60.0, -90.0], dtype=np.float32)
+    ds = xr.Dataset(
+        {"data": (("time", "level", "lat", "lon"), np.zeros((1, 2, 5, 1), dtype=np.float32))},
+        coords={"time": [0], "level": ["z1000", "tp"], "lat": latitudes, "lon": [0.0]},
+    )
+    lat, weight = convert.latitude_weights(ds)
+    np.testing.assert_array_equal(lat, latitudes)
+    np.testing.assert_allclose(weight, np.cos(np.deg2rad(np.abs(latitudes))), atol=1e-7)
+
+    convert.write_sidecars(
+        tmp_path,
+        ["z1000", "tp"],
+        np.array([1.0, 2.0], dtype=np.float32),
+        np.array([3.0, 4.0], dtype=np.float32),
+        lat,
+        weight,
+        "level",
+    )
+    with xr.open_dataarray(tmp_path / "mean.nc") as mean:
+        assert mean.dims == ("level",)
+        assert mean.shape == (2,)
+    with xr.open_dataarray(tmp_path / "weight.nc") as spatial:
+        assert spatial.dims == ("lat",)
+        assert spatial.shape == (5,)
+        np.testing.assert_array_equal(spatial.lat.values, latitudes)
+
+    # Matches core after weight.reshape(1, H, 1): channel and spatial
+    # weights broadcast independently over (B, T, C, H, W).
+    output = np.zeros((1, 1, 2, 5, 3), dtype=np.float32)
+    channel_weight = np.ones((2, 1, 1), dtype=np.float32)
+    spatial_weight = weight.reshape(1, 5, 1)
+    assert (output * channel_weight * spatial_weight).shape == output.shape
+
+
+def test_latitude_weight_rejects_missing_or_multidimensional_lat() -> None:
+    with pytest.raises(SystemExit, match="one-dimensional lat"):
+        convert.latitude_weights(xr.Dataset(coords={"latitude": [0.0]}))
+    with pytest.raises(SystemExit, match="one-dimensional lat"):
+        convert.latitude_weights(
+            xr.Dataset(coords={"lat": (("y", "x"), np.zeros((2, 2), dtype=np.float32))})
+        )
+
+
+def test_resume_requires_existing_times_to_be_exact_prefix() -> None:
+    planned = xr.Dataset(
+        {"data": (("time", "level"), np.arange(8, dtype=np.float32).reshape(4, 2))},
+        coords={"time": np.arange(4), "level": ["a", "b"]},
+    )
+    existing = planned.isel(time=slice(0, 2))
+    assert convert.validate_resume_prefix(planned, existing) == 2
+
+    with pytest.raises(SystemExit, match="exact prefix"):
+        convert.validate_resume_prefix(planned, planned.isel(time=[0, 2]))
+
+    incompatible = existing.assign_coords(level=["a", "c"])
+    with pytest.raises(SystemExit, match="coordinate 'level' differs"):
+        convert.validate_resume_prefix(planned, incompatible)
+
+
+def test_incremental_write_resumes_from_store_not_stale_state(tmp_path: Path) -> None:
+    pytest.importorskip("zarr")
+    output = tmp_path / "out.zarr"
+    state_path = convert.conversion_state_path(output)
+    ds = xr.Dataset(
+        {
+            "data": (
+                ("time", "level", "lat", "lon"),
+                np.arange(20, dtype=np.float32).reshape(5, 1, 2, 2),
+            )
+        },
+        coords={"time": np.arange(5), "level": ["a"], "lat": [1.0, 0.0], "lon": [0.0, 1.0]},
+    ).chunk({"time": 1})
+
+    # Mimic a process that successfully appended the first batch but stopped
+    # before its audit file was updated. Recovery must trust the store prefix.
+    ds.isel(time=slice(0, 2)).to_zarr(output, mode="w", consolidated=False)
+    convert.write_conversion_state(
+        state_path,
+        {"status": "failed", "completed_time_steps": 0, "contract_sha256": "test"},
+    )
+    state = {"contract_sha256": "test", "output": str(output)}
+    convert.write_incremental_zarr(
+        ds,
+        output,
+        batch_time=2,
+        resume=True,
+        state_path=state_path,
+        state=state,
+    )
+
+    restored = xr.open_zarr(output, consolidated=True)
+    try:
+        np.testing.assert_array_equal(restored.time.values, np.arange(5))
+        np.testing.assert_allclose(restored.data.values, ds.data.compute().values)
+    finally:
+        restored.close()
+    saved = __import__("json").loads(state_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "completed"
+    assert saved["completed_time_steps"] == 5
+
+
+def test_resume_with_state_but_no_store_creates_output(tmp_path: Path) -> None:
+    pytest.importorskip("zarr")
+    output = tmp_path / "not-created-yet.zarr"
+    state_path = convert.conversion_state_path(output)
+    convert.write_conversion_state(state_path, {"status": "failed", "phase": "statistics"})
+    ds = xr.Dataset({"x": (("time",), [1.0, 2.0])}, coords={"time": [0, 1]})
+
+    convert.write_incremental_zarr(
+        ds,
+        output,
+        batch_time=1,
+        resume=True,
+        state_path=state_path,
+        state={"contract_sha256": "same"},
+    )
+
+    restored = xr.open_zarr(output, consolidated=True)
+    try:
+        np.testing.assert_allclose(restored.x.values, [1.0, 2.0])
+    finally:
+        restored.close()
 
 
 def test_regrid_era5_quarter_degree_to_exact_s2s_grid_stays_lazy() -> None:
@@ -122,6 +364,118 @@ def test_regrid_supports_nearest_per_variable_and_rejects_bad_method() -> None:
     assert set(np.unique(result.lsm.values)) <= {0, 1}
     with pytest.raises(SystemExit, match="unsupported regrid method"):
         convert.regrid_dataset(ds, {"method": "conservative"})
+
+
+def test_s2s_daily_accumulation_uses_ending_24_hour_window_and_units() -> None:
+    times = np.arange(
+        np.datetime64("2023-06-30T01"),
+        np.datetime64("2023-07-02T01"),
+        np.timedelta64(1, "h"),
+    )
+    ds = xr.Dataset(
+        {
+            "tp": (("time", "lat", "lon"), np.full((48, 1, 1), 0.001, dtype=np.float32)),
+            "ttr": (("time", "lat", "lon"), np.full((48, 1, 1), 3600.0, dtype=np.float32)),
+            "t2m": (("time", "lat", "lon"), np.arange(48, dtype=np.float32)[:, None, None]),
+        },
+        coords={"time": times, "lat": [0.0], "lon": [0.0]},
+    ).chunk({"time": 6})
+
+    result = convert.apply_steps(ds, [{"s2s_daily_accumulation": {}}])
+
+    np.testing.assert_array_equal(
+        result.time.values,
+        np.array(["2023-07-01", "2023-07-02"], dtype="datetime64[ns]"),
+    )
+    assert hasattr(result.tp.data, "chunks")
+    np.testing.assert_allclose(result.tp.compute(), 24.0)
+    np.testing.assert_allclose(result.ttr.compute(), 1.0)
+    np.testing.assert_allclose(result.t2m.values[:, 0, 0], [23.0, 47.0])
+    assert result.tp.attrs["units"] == "mm"
+    assert result.ttr.attrs["units"] == "W m-2"
+
+
+def test_daily_aggregation_supports_custom_variables_and_operators() -> None:
+    times = np.arange(
+        np.datetime64("2023-06-30T01"),
+        np.datetime64("2023-07-01T01"),
+        np.timedelta64(1, "h"),
+    )
+    ds = xr.Dataset(
+        {
+            "ssr": (("time",), np.full(24, 3600.0, dtype=np.float32)),
+            "custom_peak": (("time",), np.arange(24, dtype=np.float32)),
+            "custom_mean": (("time",), np.arange(24, dtype=np.float32)),
+        },
+        coords={"time": times},
+    ).chunk({"time": 6})
+
+    result = convert.apply_steps(
+        ds,
+        [
+            {
+                "daily_aggregation": {
+                    "variables": {
+                        "ssr": {"operator": "sum", "factor": 1.0 / 86400.0, "units": "W m-2"},
+                        "custom_peak": {"operator": "max", "offset": 2.0, "units": "custom"},
+                        "custom_mean": {"operator": "mean"},
+                    }
+                }
+            }
+        ],
+    )
+
+    assert list(result.data_vars) == ["ssr", "custom_peak", "custom_mean"]
+    assert hasattr(result.ssr.data, "chunks")
+    np.testing.assert_allclose(result.ssr.compute(), 1.0)
+    np.testing.assert_allclose(result.custom_peak.compute(), 25.0)
+    np.testing.assert_allclose(result.custom_mean.compute(), 11.5)
+    assert result.ssr.attrs["units"] == "W m-2"
+
+    with pytest.raises(SystemExit, match="unsupported operator"):
+        convert.daily_aggregation(
+            ds,
+            {"variables": {"ssr": {"operator": "median"}}},
+        )
+
+
+def test_s2s_daily_accumulation_rejects_or_drops_incomplete_windows() -> None:
+    times = np.arange(
+        np.datetime64("2023-07-01T00"),
+        np.datetime64("2023-07-03T01"),
+        np.timedelta64(1, "h"),
+    )
+    values = np.ones((49, 1, 1), dtype=np.float32)
+    ds = xr.Dataset(
+        {"tp": (("time", "lat", "lon"), values), "ttr": (("time", "lat", "lon"), values)},
+        coords={"time": times, "lat": [0.0], "lon": [0.0]},
+    )
+
+    with pytest.raises(SystemExit, match="complete 24-hour windows"):
+        convert.s2s_daily_accumulation(ds, {})
+
+    result = convert.s2s_daily_accumulation(ds, {"incomplete": "drop"})
+    np.testing.assert_array_equal(
+        result.time.values,
+        np.array(["2023-07-02", "2023-07-03"], dtype="datetime64[ns]"),
+    )
+
+
+def test_s2s_daily_accumulation_detects_missing_hour() -> None:
+    times = np.arange(
+        np.datetime64("2023-06-30T01"),
+        np.datetime64("2023-07-02T01"),
+        np.timedelta64(1, "h"),
+    )
+    times = np.delete(times, 10)
+    values = np.ones((47, 1, 1), dtype=np.float32)
+    ds = xr.Dataset(
+        {"tp": (("time", "lat", "lon"), values), "ttr": (("time", "lat", "lon"), values)},
+        coords={"time": times, "lat": [0.0], "lon": [0.0]},
+    )
+
+    with pytest.raises(SystemExit, match="incomplete daily window"):
+        convert.s2s_daily_accumulation(ds, {})
 
 
 def test_merge_static_removes_single_time_and_preserves_order() -> None:

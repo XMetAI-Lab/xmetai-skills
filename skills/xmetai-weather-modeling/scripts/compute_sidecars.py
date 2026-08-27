@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Compute mean/std/weight sidecars for a prepared Zarr dataset.
 
-Sidecars are the per-channel statistics consumed by the core model library:
-``mean`` and ``std`` are computed per channel over the non-channel dims
-(usually time, lat, lon); ``weight`` follows the core channel-weight
-convention (level-scaled, optionally corrected by land/ocean groups,
-normalized to a maximum of 1).
+Sidecars are consumed by the core model library: ``mean`` and ``std`` are
+computed per channel over the non-channel dims, while ``weight`` is the
+one-dimensional cosine-latitude spatial weight. Core computes its separate
+per-channel ``channel_weights`` buffer from channel names.
 
 Compute sidecars from the unit-converted, log-transformed data *before*
 normalization. Output files are 1-D per-channel NetCDF arrays named
-``mean.nc`` / ``std.nc`` / ``weight.nc``; the core reader prefers ``.nc``
-over ``.npy`` over Zarr variables.
+``mean.nc`` / ``std.nc`` are channel arrays and ``weight.nc`` is a latitude
+array; the core reader prefers ``.nc`` over ``.npy`` over Zarr variables.
 
 Usage:
 
@@ -23,7 +22,6 @@ Read-only by default; writes sidecar files only with ``--allow-write``.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -33,9 +31,6 @@ try:
     import xarray as xr
 except ImportError:  # pragma: no cover - environment without parsing deps
     xr = None
-
-
-LEVEL_RE = re.compile(r"^([A-Za-z]+)_?(\d+)$")
 
 
 def open_zarr(path: Path, chunks: dict[str, int] | None = None):
@@ -98,20 +93,14 @@ def per_channel_stats(ds, names: list[str], coord: str) -> tuple[np.ndarray, np.
     )
 
 
-def channel_weights(names: list[str], land: set[str], ocean: set[str]) -> np.ndarray:
-    weights = np.ones(len(names), dtype=np.float32)
-    for i, name in enumerate(names):
-        match = LEVEL_RE.match(name)
-        if match is not None:
-            level = int(match.group(2))
-            weights[i] = max(0.2, level / 1000.0)
-    for i, name in enumerate(names):
-        if name in land:
-            weights[i] *= 0.33
-        elif name in ocean:
-            weights[i] *= 0.67
-    weights /= weights.max()
-    return weights
+def latitude_weights(ds) -> tuple[np.ndarray, np.ndarray]:
+    if "lat" not in ds.coords or ds["lat"].ndim != 1:
+        raise SystemExit("weight.nc generation requires a one-dimensional lat coordinate")
+    lat = np.asarray(ds["lat"].values, dtype=np.float64)
+    if lat.size == 0 or not np.isfinite(lat).all():
+        raise SystemExit("weight.nc generation requires finite non-empty latitude values")
+    weight = np.maximum(np.cos(np.deg2rad(np.abs(lat))), 0.0).astype(np.float32)
+    return lat.astype(np.float32), weight
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,8 +109,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", required=True, help="directory for sidecar files")
     parser.add_argument("--channel-coord", default=None, help="level or channel (auto-detected)")
     parser.add_argument("--chunks", default="time=4", help="lazy read chunks, e.g. time=4")
-    parser.add_argument("--land-names", default="", help="comma-separated land channel names")
-    parser.add_argument("--ocean-names", default="", help="comma-separated ocean channel names")
     parser.add_argument("--allow-write", action="store_true", help="write sidecar files")
     parser.add_argument("--overwrite", action="store_true", help="replace existing sidecar files")
     args = parser.parse_args(argv)
@@ -135,16 +122,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         names, coord = channel_names(ds, args.channel_coord)
         mean, std = per_channel_stats(ds, names, coord)
+        lat, weight = latitude_weights(ds)
     finally:
         ds.close()
-    land = {n.strip() for n in args.land_names.split(",") if n.strip()}
-    ocean = {n.strip() for n in args.ocean_names.split(",") if n.strip()}
-    weight = channel_weights(names, land, ocean)
 
     print(f"input   : {input_path}")
     print(f"channels: {len(names)} ({coord or 'data_vars'})")
-    for name, m, s, w in zip(names, mean, std, weight):
-        print(f"  {name:8s} mean={m:.4g} std={s:.4g} weight={w:.4g}")
+    for name, m, s in zip(names, mean, std):
+        print(f"  {name:8s} mean={m:.4g} std={s:.4g}")
+    print(f"latitude weights: {len(weight)} values, min={weight.min():.4g}, max={weight.max():.4g}")
 
     targets = {key: out_dir / f"{key}.nc" for key in ("mean", "std", "weight")}
     existing = [str(path) for path in targets.values() if path.exists()]
@@ -159,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     coord_name = coord or "channel"
-    for key, values in (("mean", mean), ("std", std), ("weight", weight)):
+    for key, values in (("mean", mean), ("std", std)):
         da = xr.DataArray(
             values,
             dims=[coord_name],
@@ -169,6 +155,14 @@ def main(argv: list[str] | None = None) -> int:
         path = targets[key]
         da.to_netcdf(path)
         print(f"WROTE {path}")
+    weight_da = xr.DataArray(
+        weight,
+        dims=["lat"],
+        coords={"lat": lat},
+        attrs={"long_name": "cosine latitude area weight", "formula": "cos(abs(lat))"},
+    )
+    weight_da.to_netcdf(targets["weight"])
+    print(f"WROTE {targets['weight']}")
     return 0
 
 

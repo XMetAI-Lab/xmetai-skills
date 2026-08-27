@@ -5,7 +5,7 @@ Takes one or more prepared Zarr stores (each a single ``data`` variable with a
 ``level``/``channel`` coordinate, not yet normalized), verifies that their
 time/lat/lon axes align, concatenates the channel dimension, computes
 per-channel mean/std over the merged dataset, and writes a normalized Zarr
-plus ``mean.nc`` / ``std.nc`` / ``weight.nc`` sidecars. The channel count is
+plus channel ``mean.nc`` / ``std.nc`` and latitude ``weight.nc`` sidecars. The channel count is
 determined by the inputs, so any combination of datasets can be merged without
 hard-coding dimensions. Normalization uses the same channel-level statistics
 as ``convert_to_zarr.py``, so the merged dataset is normalized as a whole,
@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from convert_to_zarr import GUARD_ACK, canonicalize_latlon, channel_weights, compute_channel_stats, default_channel_order, normalize_ds, parse_chunks, write_sidecars
+from convert_to_zarr import GUARD_ACK, canonicalize_latlon, compute_channel_stats, default_channel_order, latitude_weights, normalize_ds, parse_chunks, write_sidecars
 
 
 def open_store(path: Path):
@@ -80,8 +80,6 @@ def main(argv: list[str] | None = None) -> int:
         default="time=1,level=-1,channel=-1,lat=-1,lon=-1",
         help="output chunks; -1 means the complete dimension",
     )
-    parser.add_argument("--land-names", default="", help="comma-separated land channel names for weight correction")
-    parser.add_argument("--ocean-names", default="", help="comma-separated ocean channel names for weight correction")
     parser.add_argument("--allow-write", action="store_true", help="confirm the write after guard approval")
     parser.add_argument("--overwrite", action="store_true", help="confirm replacing an existing output store")
     parser.add_argument("--ack-risk", default=None, help=f"must equal: {GUARD_ACK}")
@@ -166,15 +164,13 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Refusing write: --ack-risk must equal {GUARD_ACK}")
         run_guard(stores, output, args.overwrite)
 
-        land = {n.strip() for n in args.land_names.split(",") if n.strip()}
-        ocean = {n.strip() for n in args.ocean_names.split(",") if n.strip()}
-        weight = channel_weights(names, land, ocean)
+        lat, weight = latitude_weights(merged)
         if output_chunks:
             applicable_chunks = {name: size for name, size in output_chunks.items() if name in merged.dims}
             merged = merged.chunk(applicable_chunks)
         merged["data"].encoding.pop("chunks", None)
         merged.to_zarr(str(output), mode="w" if args.overwrite else "w-", consolidated=True)
-        write_sidecars(output, names, mean, std, weight, coord)
+        write_sidecars(output, names, mean, std, lat, weight, coord)
         print(f"sidecars: mean.nc / std.nc / weight.nc -> {output}")
         print(f"WROTE {output}")
         return 0

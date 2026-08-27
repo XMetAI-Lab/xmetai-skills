@@ -20,6 +20,7 @@ metadata:
 - Prefer read-only inspection and dry runs.
 - Prefer download planning and dry runs before network or filesystem writes.
 - Before a large download, confirm the data source, variables, time range, destination, estimated size, and overwrite policy.
+- Derive download time ranges from the executing dataset indexer and every configured temporal aggregation window; do not use forecast dates alone when runtime endpoint behavior or source-to-target time labels require boundary data.
 - Never store API keys, tokens, passwords, or other credentials in manifests, logs, reports, or repository files.
 - Follow repo conventions before adding abstractions.
 - Never claim train/export/deploy/runtime validation unless it actually ran.

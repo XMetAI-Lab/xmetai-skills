@@ -1,14 +1,10 @@
 # Data Download Planning
 
-Use this reference only for extracting meteorological data requirements and producing a plan before any download or data write begins. It governs the planning stage; it does not prohibit a later, explicitly confirmed download.
+Use this reference to produce a pre-download plan. It does not govern the later confirmed execution or post-download validation stages.
 
 ## Scope
 
 This route answers: **What data does the selected config require, where may it come from, and what must be confirmed before downloading it?**
-
-During this planning stage, do not download, create, convert, aggregate, regrid, normalize, append, overwrite, or otherwise modify data. Do not generate statistics or claim that a dataset is ready for training.
-
-After the user explicitly confirms the plan and asks to proceed, this planning stage is complete. Return to the main skill routing: the model may use its native capabilities to write a suitable downloader, read local configuration, use locally configured credentials without exposing or copying them, and execute only the confirmed download. No downloader needs to be bundled with this skill. Do not treat the planning-stage stop rule as a permanent ban on execution.
 
 Use **Data analysis** instead when data already exists and the task is to inspect schema, integrity, time gaps, values, statistics, static fields, or training readiness.
 
@@ -25,7 +21,7 @@ Use **Data analysis** instead when data already exists and the task is to inspec
 9. Stop before any network request or filesystem write and ask the user to confirm the download list.
 10. If the user later confirms the list and asks to proceed, exit this planning route. Execute the confirmed download with the model's native capabilities; do not continue applying this reference's no-write restriction to that execution turn.
 
-Confirmation covers only the planned source, variables, time range, destination, estimated size, authentication mechanism, and existing-file policy. If execution would materially change any of them, update the plan and obtain confirmation again. Download completion does not authorize conversion, normalization, statistics generation, Zarr mutation, or training-readiness claims.
+Confirmation covers only the planned source, variables, raw time ranges, destination, estimated size, authentication mechanism, and existing-file policy. Material changes require an updated plan. Download completion does not authorize conversion, Zarr mutation, or training-readiness claims.
 
 ## Requirement Extraction
 
@@ -40,7 +36,9 @@ Check:
 - Input and output variable names and channel counts.
 - Historical and forecast frames.
 - Training and evaluation time coverage required from the data.
+- The executing dataset indexer's first/last admissible sequence, including strict endpoint exclusions or other implementation-only buffer frames.
 - Time frequency and sample interval.
+- Per-variable source time semantics and aggregation coverage: source interval, source timestamp meaning, target window, target label, and required leading/trailing source boundary.
 - Spatial extent, grid, and resolution when specified.
 - Expected Zarr or NetCDF variables and coordinates.
 - Static fields, masks, and `mean`, `std`, or `weight` sidecars expected by the config.
@@ -82,6 +80,30 @@ When the user selects more than one entry config, produce a multi-config plan in
 - Do not claim that resizing, cropping, regridding, aggregation, normalization, or unit conversion is implemented unless the executing code path was traced.
 - A README instruction to contact the author establishes the documented acquisition method, but does not prove that data is private, restricted, or unavailable elsewhere.
 - When channel names come from a Zarr coordinate dynamically, report only explicitly enforced channels as confirmed unless this reference provides an authoritative default manifest for the selected dataset family. For S2S C76, use the default manifest below when the user has not requested a custom channel configuration; do not mark its list or order as pending merely because the runtime reads the Zarr coordinate dynamically.
+
+### Time Coverage Derivation
+
+Do not derive the download range only as `initialization time + maximum forecast lead`. Produce three explicit ranges:
+
+1. **Requested model range**: the history, initialization, and physical target timestamps the user intends to train or evaluate.
+2. **Prepared model-frame range**: the timestamps that must exist after conversion so the executing dataset class actually emits every requested sample.
+3. **Source download range**: the raw timestamps needed per variable group to create that prepared range.
+
+Trace the executing dataset indexer rather than assuming an ideal inclusive range. Inspect how it computes `total_frames`, maps a sequence index to initialization time, checks continuity, and bounds its loop. A strict bound such as `i < len(times) - total_frames` or `range(len(times) - total_frames)` excludes a sequence that ends exactly on the last available frame; if the code is not being fixed, include and label the additional trailing frame as a **runtime implementation buffer**, not as a physical forecast target. Apply a loader-required buffer to every model channel that must share the prepared time axis.
+
+For every variable that is resampled, rolled, differenced, accumulated, averaged, minimized, or maximized over time, derive its raw boundary from configuration and source metadata, not from its name. Record:
+
+- source temporal representation: instantaneous, interval accumulation, interval mean/rate, or running accumulation since a forecast start/reset;
+- source timestamp meaning: instant, interval start, or interval end;
+- source interval and expected timestamp cadence;
+- target operator and window length;
+- target label convention and label hour;
+- incomplete-window policy;
+- exact leading/trailing source coverage needed for the prepared output range.
+
+For interval-ending hourly samples aggregated over `W` hours and labelled at the window end, prepared outputs `[S, E]` require raw samples `[S - (W - 1) hours, E]`. For the same inputs labelled at the window start, outputs `[S, E]` require `[S + 1 hour, E + W hours]`. These formulas are examples, not universal conventions: adjust them when the provider labels intervals differently. If the provider already supplies the exact target window with matching labels, no aggregation boundary extension is needed. Running accumulations must be de-accumulated with their reset/forecast-step semantics before applying a new window; never sum them as if they were independent intervals.
+
+Keep variable groups separate when their source ranges differ. Instantaneous daily fields, hourly accumulated fields, and static fields may therefore have different download rows. After deriving each group, verify that their converted time-axis intersection still covers the complete prepared model-frame range. Never use an ambiguous phrase such as "the 10 October daily value" without also stating the window and whether the timestamp labels its start or end.
 
 ### Default S2S C76 Channel Manifest
 
@@ -181,27 +203,7 @@ In every S2S pre-download plan:
 
 ## Pre-Download Plan
 
-Record:
-
-- Selected config(s) and traced base configs (per config in multi-config mode).
-- Dataset and proposed source.
-- Confirmed variables and levels.
-- Optional requirements.
-- Pending confirmations.
-- Shared datasets and deduplication notes (multi-config mode).
-- Start and end time.
-- Time coverage split: training vs validation/test ranges when the config defines them, or the inference history window for inference configs.
-- Temporal frequency.
-- Spatial extent and resolution.
-- Download format, target format, and conversion step (see Format Conversion Chain).
-- Static fields and statistics sidecars expected by the config.
-- Normalization convention: the core convention stores normalized values in Zarr (model forward does not re-normalize); record that the prepared dataset follows it. Precipitation channels use **mm accumulated values** (see Format Conversion Chain). Inference input form depends on the model's export/inference code and should be confirmed per model.
-- Destination directory, following the directory layout defined in data-preprocessing.md (download staging, converted Zarr, sidecars).
-- Estimated file count and size when known.
-- Authentication method without credentials.
-- Existing-file and overwrite policy.
-
-Prefer a machine-readable YAML or JSON manifest when the plan will be reused. Creating a manifest file is itself a filesystem write; print it in the response unless the user explicitly asks to save it.
+Use the required output template. In addition to source, variables, grid, frequency, formats, destination, size, authentication, and overwrite policy, record the three time ranges from **Time Coverage Derivation** per variable group and separate confirmed, optional, and blocking-pending items. In multi-config mode, preserve per-config contracts and deduplicate only identical source datasets. Print reusable YAML/JSON unless the user explicitly asks to save it.
 
 ## Format Conversion Chain
 
@@ -221,7 +223,7 @@ Rules:
 - The plan marks the chain as feasible or pending; executing the conversion belongs to Data preprocessing, not to this route.
 - CDS delivery form is dataset-specific and must not be assumed: `reanalysis-era5-land` returns a ZIP archive by default even for single-variable requests, so record `download_format: unarchived` in the request and keep unzipping as a fallback step; `reanalysis-era5-single-levels` returns a plain file by default.
 - On the current CDS backend, ERA5 requests should use `date` plus `product_type: reanalysis`; the `year`/`month`/`day` form fails with `Duplicate value for month`. Record the exact request fields so the chain stays actionable without rediscovery.
-- Precipitation channels are normalized to **mm accumulated values** regardless of source. Sources differ: ERA5/ERA5-Land deliver `tp` in metres (step-accumulated, ×1000 for mm), some products deliver rates (`kg m-2 s-1`, `mm/h`, `mm/s`, needing × accumulation seconds), and others already deliver mm accumulations with a specific window. Record the source's original unit and window for every precipitation variable, the conversion factor, and the target accumulation window from the model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models).
+- Apply the Time Coverage Derivation rules to every temporally transformed variable, not only named precipitation or radiation channels. Precipitation channels additionally normalize to **mm accumulated values** regardless of source. Sources differ: ERA5/ERA5-Land deliver `tp` in metres (step-accumulated, ×1000 for mm), some products deliver rates (`kg m-2 s-1`, `mm/h`, `mm/s`, needing × accumulation seconds), and others already deliver mm accumulations with a specific window. Record the source's original unit and window, conversion factor, target window, and time-label convention for each affected variable.
 
 ## Static Fields Acquisition
 
@@ -242,45 +244,17 @@ When a download-list item has no confirmed source, do not hard-code a dataset-sp
 - Stop at the channel list; do not download. The user picks a channel and runs the download, then the agent verifies the files (format detection) before conversion.
 - Mark unverified channels as pending confirmation; never claim a channel is official without checking.
 
-## Preflight Status
-
-Before declaring the plan complete, report whether these items are confirmed:
-
-- Exact entry config.
-- Data source and license.
-- Variable and level mapping.
-- Time range, frequency, extent, and resolution.
-- Destination and expected storage.
-- Existing-file policy.
-- Secure authentication mechanism.
-
-Never include API keys, tokens, passwords, or other credentials in plans, commands, logs, or repository files.
-
 ## Required Output
 
 Use `assets/templates/data_download_plan.md` as the standard output structure. Fill only fields supported by repository evidence, write `Pending confirmation` when a value is unresolved, and print the completed plan in the response unless the user explicitly asks to save it.
 
-Keep the printed plan short and readable:
+Keep the printed plan short:
 
-- Lead with a one-sentence bottom line: what to download, from where, approximate size, and where to place it.
-- Show the download list as two compact tables: a main requirements table (purpose, dataset, variables, frequency, time range, grid, estimated size) and a download & conversion table (source dataset, download format, conversion step, target format). Avoid a single wide table with more than about seven columns.
-- For training, split the download rows by the config's train and validation/test time ranges; for inference, list only the inference history window and the required sidecars.
-- Name the source dataset explicitly in every download row (CDS catalogue name or author-provided data) and include the conversion step from source to target, so the plan is executable without re-deriving the download or conversion details.
-- Include static fields in the download list only when the model contract requires them (for example non-empty `maskid`, non-empty `static_fields`, or required `const`); omit the static-field row for models that do not need them. Statistics sidecars (`mean`/`std`/`weight`) are always required for Zarr grid models and should be listed with their source (computed from the prepared dataset).
-- Print download scripts and steps/config files in the response instead of writing them to the workspace; creating such files is itself a filesystem write and requires the user to ask for it explicitly.
-- Do not state unverified scientific conclusions (for example the normalization storage convention) in the bottom line or the download list; put them in Pending Confirmation unless verified from the executing code path.
-- Keep evidence and config-internal details (code paths, helper names, constants) out of the printed plan. Evidence is collected during extraction but shown only when the user asks for justification.
-- Do not print optional requirements or a preflight table as separate sections; fold "not needed" items into one line and keep pending items to those that block the download or the conversion.
-- State the recommended next step and the blocking confirmations.
+- Lead with what to download, source, size, and destination.
+- Use the template's requirements and conversion tables; split rows when configs or raw time ranges differ.
+- Show prepared versus raw time coverage and explain every boundary extension.
+- Include only model-required static fields; list Zarr sidecars as computed outputs.
+- Keep evidence/internal helpers out unless requested, and show only blocking pending items.
+- Print scripts/configs instead of saving them unless the user asks for files.
 
-The template covers:
-
-```text
-Bottom line
-Download list (deduplicated; per-config blocks when contracts differ)
-Data source
-Pending confirmation (blocking items only)
-Next step
-```
-
-For the planning response, end by stating that no download, conversion, file creation, or data modification was performed and ask the user to confirm the listed download before execution. This statement applies only to the planning response. Once the user confirms and asks to proceed, exit this route rather than repeating it. Do not report file integrity, schema validation, or training readiness under the planning route; hand those tasks to Data analysis after data exists.
+End the planning response by stating that nothing was written and asking for confirmation. After confirmation, exit this route. File integrity and training readiness belong to Data analysis after download/conversion.

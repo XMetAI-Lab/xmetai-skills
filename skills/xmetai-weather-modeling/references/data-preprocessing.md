@@ -1,26 +1,10 @@
 # Data Preprocessing
 
-Use this reference when downloaded data exists and needs to be parsed, normalized, converted, or validated before training. This route executes the format chain planned under Data download planning and stops before any training-readiness claim.
+Use this reference after download to detect formats and execute guarded NetCDF/Zarr/GRIB conversion, normalization sidecars, and optional static-field conversion. It neither downloads data nor claims training readiness; Data analysis owns the final judgment.
 
 ## Scope
 
-This route answers: **What format is the downloaded data, how is it normalized, and is the converted result consistent with the selected config?**
-
-It covers:
-
-- Format detection: extension and magic bytes first, then metadata read.
-- Declarative conversion steps: variable rename, variable selection, time selection, resampling, channel merge.
-- Optional static-field conversion to a core-compatible `const.nc` when the selected model requires it.
-- Guarded conversion to Zarr.
-- Post-conversion validation: hand the converted store to Data analysis, where `inspect_zarr_schema.py` describes the store and the agent judges training readiness against the model contract.
-
-It does **not**:
-
-- Download data or touch the network. Download planning produces the plan; execution happens in the user's environment.
-- Claim training readiness. Hand that to Data analysis after the data exists.
-- Write without approval. Conversion is dry-run by default; real writes require explicit flags and the Zarr write guard.
-
-Use **Data download planning** when data is missing and only a plan is requested. Use **Data analysis** when data already exists and needs read-only schema, integrity, statistics, or training-readiness checks.
+No write occurs without explicit approval.
 
 ## Workflow
 
@@ -28,10 +12,9 @@ Use **Data download planning** when data is missing and only a plan is requested
 2. Derive the steps config from the download plan's format conversion chain and the selected config's contract (variables, frequency, time range).
 3. Dry-run `convert_to_zarr.py` and show the before/after plan to the user.
 4. After explicit user approval, run with `--allow-write --ack-risk I-understand-this-mutates-zarr`; the Zarr write guard executes before any mutation.
-5. Hand the converted store to Data analysis: run `inspect_zarr_schema.py` for the store description (dims, variables, coordinates, chunks, statistics) and let the agent judge training readiness against the model contract.
-6. Report the conversion summary. Training-readiness validation belongs to Data analysis.
+5. Report the conversion summary, then hand the output to Data analysis for schema and training-readiness checks.
 
-Conversion completes data readiness for the main data: a `normalize` step writes `mean`/`std`/`weight` sidecars into the output directory. Static fields are prepared separately (download plan provides the source; `inspect_static_nc.py` checks their content) and their presence is verified by the agent at the Data analysis stage, not by the conversion script.
+A `normalize` step writes `mean`/`std`/`weight` beside the output Zarr. Prepare required static fields separately as `const.nc`.
 
 ## Format Support
 
@@ -64,9 +47,7 @@ python inspect_data_format.py --path <file-or-directory> [--json]
 python inspect_data_format.py --path <file-or-directory> --config expected.json
 ```
 
-Statuses: `recognized`, `recognized-by-magic`, `mismatch` (extension and magic disagree), `decode-pending` (GRIB without cfgrib), `decode-error` (GRIB decode failure), `unsupported`.
-
-Use `inspect_data_format.py` to identify the format and read shallow metadata. For deep structure checks on a known Zarr store (chunks, dtype, sample statistics), use `inspect_zarr_schema.py`; for static NetCDF field files, use `inspect_static_nc.py`. Do not run them redundantly for the same shallow metadata.
+Statuses: `recognized`, `recognized-by-magic`, `mismatch`, `decode-pending`, `decode-error`, `unsupported`. Use `inspect_zarr_schema.py` for deep Zarr checks and `inspect_static_nc.py` for static NetCDF; do not repeat the same shallow inspection.
 
 ### convert_to_zarr.py
 
@@ -75,15 +56,26 @@ Dry-run conversion plan first; guarded write on approval.
 ```text
 python convert_to_zarr.py --input in.nc --output out.zarr [--steps-config steps.json]
 python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr [--input-chunks time=4]
+python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr --batch-time 31
+python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr --input-period-batch 1 --input-overlap-periods 1
+python convert_to_zarr.py --input-glob "era5_*.nc" --output out.zarr --batch-time 31 --resume
 python convert_to_zarr.py --input in.nc --output out.zarr --allow-write --ack-risk I-understand-this-mutates-zarr [--overwrite]
 python convert_to_zarr.py --input static.nc --output const.nc --output-format static-netcdf --steps-config static.json
 ```
 
-The write path requires explicit approval flags; Zarr output additionally runs the Zarr write guard. Inputs: NetCDF (classic/NetCDF-4), Zarr, or GRIB (multi-variable mixed-edition GRIB is read per variable automatically). Outputs are a main Zarr store or, in static mode, one `const.nc` file.
-
-Static conversion uses the same dry-run and explicit write acknowledgement. With `--output-format static-netcdf`, a `merge_static` step writes a single core-compatible `const(channel, lat, lon)` DataArray instead of a Zarr store. Existing files are never replaced unless `--overwrite` is supplied.
+Inputs are NetCDF, Zarr, or supported GRIB. Writes require explicit approval flags; Zarr also runs the write guard. Static mode writes `const(channel, lat, lon)` and existing outputs require `--overwrite`.
 
 Repeat `--input` or use `--input-glob` for a homogeneous NetCDF collection. Multi-file inputs are opened lazily with `open_mfdataset(combine="by_coords")`; file opening is serial for Windows netCDF4/HDF5 safety, while downstream Dask reductions and writes remain chunked. Dry-run inspects metadata and the planned transforms only; it deliberately defers full-data normalization statistics until the guarded write phase. Use `--input-chunks` and `--output-chunks` to control memory and I/O. The default output layout keeps one time step per chunk and complete channel/spatial dimensions, matching full-field weather-model reads without loading the whole time series.
+
+NetCDF-4/HDF5 inputs use `h5netcdf` when it is installed, including the one-file-at-a-time catalog pass and later multi-file batches. This avoids observed Windows netCDF4/HDF5 failures when a file is closed after metadata inspection and reopened for statistics. Classic CDF inputs retain the compatible netCDF4/xarray fallback; do not force `h5netcdf` for every `.nc` extension.
+
+For multiple NetCDF inputs, the converter first catalogs files one at a time by source time coverage, then opens only a bounded number of chronological periods. `--input-period-batch` defaults to one period and `--input-overlap-periods` defaults to one neighboring period on each side. The overlap preserves transformations such as daily accumulation across month/year boundaries; duplicate prepared times are removed before statistics and writes. Files sharing the same source time coverage remain in one period so pressure-level and surface variable files can still be merged. The dry-run previews only the first bounded group instead of opening the complete collection. The conversion state records the maximum number of simultaneously grouped input files observed.
+
+Zarr output is written incrementally along `time`; `--batch-time` sets the number of prepared output frames per append batch and defaults to 31. After each successful batch, `<output>.conversion.json` is atomically updated. Use `--resume` after an interrupted run: the converter reads the actual Zarr time coordinate and continues only when it is the exact prefix reproduced by the bounded file batches, while rejecting gaps, overlaps, reordered times, changed transformation/chunk/batching settings, and incompatible variables, dimensions, or coordinates. The state file is an audit record rather than the source of write progress, so a crash between a successful append and the state update does not duplicate data. Resume remains a Zarr mutation and requires the normal write approval flags.
+
+When `normalize` is enabled for a multi-file conversion, each prepared file batch computes per-channel `count`, `mean`, and `M2`; the batches are combined with the Chan/Welford formula and persisted in the conversion state before the normalized write pass. This bounds the statistics task graph and handles NaNs with a separate valid count per channel. Resume of normalized output requires the identical input set so previously written values keep the same global statistics; extending a normalized store requires a separate statistics/renormalization workflow.
+
+An interrupted statistics pass may leave the conversion state before any Zarr store exists. `--resume` accepts that state, recomputes the bounded statistics, and creates the store instead of attempting to open a missing group. A batch with zero valid samples for one channel contributes `count=0, M2=0` and does not poison later Chan/Welford merges. Before writing normalized data, the converter rejects any channel whose final count is zero or whose mean, M2, or standard deviation is non-finite.
 
 cfgrib index files (`.idx`) are not written: all GRIB reads pass `indexpath=""`. The `merge_to_data` step combines data variables into a single `data` variable with a `level`/`channel` coordinate, matching the model library layout.
 
@@ -91,18 +83,14 @@ New CDS ERA5 downloads name the time coordinate `valid_time` instead of `time`; 
 
 ### compute_sidecars.py
 
-Compute the per-channel `mean` / `std` / `weight` sidecars for a prepared Zarr store.
+Compute sidecars from physical, unit-converted and log-transformed values before normalization.
 
 ```text
 python compute_sidecars.py --input out.zarr --output-dir <dir>
 python compute_sidecars.py --input out.zarr --output-dir <dir> --chunks time=4 --allow-write [--overwrite]
 ```
 
-Writes `mean.nc` / `std.nc` / `weight.nc` (1-D per-channel NetCDF arrays); the core reader prefers `.nc` over `.npy` over Zarr variables and reshapes them per channel. `weight` follows the core convention (level-scaled, optional land/ocean corrections via `--land-names` / `--ocean-names`, normalized to a maximum of 1).
-
-Channel statistics are reduced as one lazy computation graph instead of separately materializing every channel's mean and standard deviation. The operation remains a full-data scan, but its memory use is bounded by the configured chunks.
-
-Compute sidecars from the unit-converted, log-transformed data before normalization. A channel with zero variance is written as `std=0`; the core normalizer treats zero std as 1.
+Writes channel-indexed `mean.nc` / `std.nc` and latitude-indexed `weight.nc`. Statistics use one lazy, chunk-bounded full-data reduction over unit-converted and log-transformed values; zero variance is stored as `std=0`, which core treats as 1. Spatial weight is `cos(abs(lat))`, matching core's `(1,H,1)` broadcast convention. Core derives its separate level-scaled `channel_weights` buffer from channel names; it must not be stored as `weight.nc`.
 
 ## Steps Config
 
@@ -115,20 +103,25 @@ JSON or YAML. Unknown steps abort the plan.
     {"keep_vars": ["z", "t", "q"]},
     {"time": {"start": "2023-06-01", "end": "2023-06-02"}},
     {"resample": {"freq": "6h", "operator": "mean"}},
+    {"daily_aggregation": {"window_hours": 24, "label_hour": 0, "incomplete": "error", "variables": {"tp": {"operator": "sum", "factor": 1000, "units": "mm"}, "ttr": {"operator": "sum", "factor": 0.000011574074074074073, "units": "W m-2"}}}},
     {"regrid": {"target": "s2s_1.5deg", "method": "linear", "variable_methods": {"lsm": "nearest"}}},
     {"merge_static": {"order": ["z", "lsm"], "coord": "channel", "name": "const"}},
-    {"units": {"q": 1000, "tp": 1000, "ttr": 1 / 3600}},
+    {"units": {"q": 1000}},
     {"log1p": ["tp"]},
     {"split_levels": {"vars": ["z", "t", "u", "v", "q"], "level_coord": "pressure_level"}},
-    {"merge_to_data": {"coord": "level", "order": ["z1000", "z925", "z850", "z700", "z600", "z500", "z400", "z300", "z250", "z200", "z150", "z100", "z50", "t1000", "t925", "t850", "t700", "t600", "t500", "t400", "t300", "t250", "t200", "t150", "t100", "t50", "u1000", "u925", "u850", "u700", "u600", "u500", "u400", "u300", "u250", "u200", "u150", "u100", "u50", "v1000", "v925", "v850", "v700", "v600", "v500", "v400", "v300", "v250", "v200", "v150", "v100", "v50", "q1000", "q925", "q850", "q700", "q600", "q500", "q400", "q300", "q250", "q200", "q150", "q100", "q50"]}},
+    {"merge_to_data": {"coord": "level"}},
     {"normalize": true}
   ]
 }
 ```
 
-`merge_to_data` concatenates the listed variables along the channel coordinate and renames the result to `data`. When `order` is omitted, channels present in the canonical `D:\cla.zarr` 76-channel contract are automatically ordered as 13 pressure levels from 1000 to 50 hPa for each of `z`, `t`, `u`, `v`, `q`, followed by `t2m,d2m,sst,ttr,10u,10v,100u,100v,msl,tcwv,tp`. A single channel or subset keeps its relative position in that contract; non-contract channels remain available and are appended in their original order. An explicit `order` remains authoritative. The result is transposed to `(time, level, lat, lon)` when a `time` dimension exists. `split_levels` expands a variable with a level dimension (for example CDS pressure levels delivered as `z/t/u/v/q` with a `pressure_level` dimension) into one variable per level, so it can feed `merge_to_data`. `units` multiplies variables by the given factors (for example `q` ×1000, `tp` ×1000, `ttr` ÷3600); `log1p` applies `log1p(clip(min=0))` to the listed variables (for example `tp`).
+`merge_to_data` concatenates variables into `data`. Without `order`, known channels follow the canonical C76 relative order (five variables at 1000→50 hPa, then `t2m,d2m,sst,ttr,10u,10v,100u,100v,msl,tcwv,tp`); subsets remain valid and unknown channels are appended. Explicit `order` is authoritative. `split_levels` expands pressure-level variables, `units` applies factors such as `q` ×1000, and `log1p` clips at zero first. Use `daily_aggregation` rather than separate generic factors when conversion also requires a daily window.
 
-Precipitation unit convention: precipitation channels are normalized to **mm accumulated values** before `log1p`/`normalize`. ERA5 and ERA5-Land deliver `tp` in metres (step-accumulated), so the steps config multiplies it by 1000 (`"tp": 1000`); rate-form precipitation (`kg m-2 s-1`, `mm/h` averages, or `mm/s`) must first be multiplied by the accumulation length in seconds. The accumulation window must follow the selected model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models) and must be recorded in the download plan so a given data source's original unit and window can be verified.
+`daily_aggregation` provides variable-independent hourly-to-daily aggregation. Input timestamps are interpreted as interval ends. `window_hours` controls the rolling window (1–24), `label_hour` selects the UTC hour used for each daily output label, and every entry under `variables` selects `sum`, `mean`, `min`, or `max` plus an optional numeric `factor`, `offset`, and output `units`. Multiple custom variables can be aggregated in one step; for example `ssr` uses the same `sum` and `1/86400` factor as `ttr` when converting accumulated J m-2 to daily-mean W m-2. Variables not listed under `variables` are retained at the resulting daily timestamps, and their original order is preserved. Arrays remain lazy.
+
+For the default S2S convention, a value labelled at 00 UTC uses the 24 samples from 01 UTC of the previous day through 00 UTC of the labelled day. The example sums `tp` and converts metres to **mm per 24 hours**, while `ttr` is summed and multiplied by `1/86400` to produce **W m-2**. `incomplete` defaults to `error`, rejecting missing hours and leading/trailing partial windows; `drop` explicitly discards partial windows. Download the preceding day's 01–23 UTC boundary hours when the first requested output day must be retained. Do not apply additional unit factors to variables already converted by this step. The older `s2s_daily_accumulation` step remains as a backward-compatible `tp/ttr` shorthand, but new configurations should use `daily_aggregation`.
+
+Precipitation unit convention: precipitation channels are normalized to **mm accumulated values** before `log1p`/`normalize`. ERA5 and ERA5-Land deliver `tp` in metres (step-accumulated). A direct conversion at the source accumulation interval uses ×1000; S2S daily data should instead use `daily_aggregation`, which performs the 24-hour sum and conversion together. Rate-form precipitation (`kg m-2 s-1`, `mm/h` averages, or `mm/s`) must first be multiplied by the accumulation length in seconds. The accumulation window must follow the selected model contract (for example daily totals for S2S, 6-hourly for IWC, hourly for ERA5-Land-based models) and must be recorded in the download plan so a given data source's original unit and window can be verified.
 
 Output Zarr stores always use `lat`/`lon` as the grid coordinate names; CDS inputs carrying `latitude`/`longitude` are renamed automatically. This matches the core dataset classes, which access `ds.lat`/`ds.lon` directly (for example `GraphCastDataset` and the `MultiZarrDataset` bbox path).
 
@@ -136,22 +129,15 @@ Output Zarr stores always use `lat`/`lon` as the grid coordinate names; CDS inpu
 
 `merge_static` is used only with `--output-format static-netcdf`. It selects static variables in the configured order, requires every `time` or `valid_time` dimension to contain exactly one value, removes that singleton dimension, and writes `const(channel, lat, lon)`. It rejects duplicate or missing variables, additional dimensions, an empty output, and normalization. Choose variable-specific regridding before this step (`linear` for continuous terrain/geopotential and `nearest` for categorical masks). The number and order of output channels must follow the selected model's `const_chans` contract; models with `const_chans=0` do not need this conversion.
 
-`normalize` computes per-channel `mean`/`std` (and level-scaled `weight`, with optional land/ocean corrections via `{"normalize": {"land_names": [...], "ocean_names": [...]}}`) from the prepared data, stores `(x - mean) / std` values in the Zarr, and writes `mean.nc` / `std.nc` / `weight.nc` next to the output Zarr. Source NaN values are preserved (for example ERA5-Land non-land pixels); the core dataset classes replace them with 0 via `torch.nan_to_num`. The same weight convention (level-scaled plus optional land/ocean) is used by `compute_sidecars.py` and `merge_normalize.py`.
+`normalize` stores `(x - mean) / std` and writes matching sidecars. Source NaNs remain in Zarr; core replaces them at load time. Land/ocean channel corrections belong to core's separately derived `channel_weights`; they do not modify the latitude-based `weight.nc`.
 
 `flatten_step` merges the `time` and `step` dimensions of a GRIB-derived dataset into a single `time` axis using the `valid_time` coordinate, drops all-NaN combinations (for example ERA5-Land short-forecast GRIB frames outside the requested window), and reorders to `(time, level, lat, lon)`. Use it after `merge_to_data` for GRIB inputs that carry a `step` dimension.
 
-When a model dataset is built from multiple converted Zarr stores (for example 65 pressure-level channels plus 11 single-level channels), merge and normalize them as one dataset with `merge_normalize.py`: it verifies time/lat/lon alignment, concatenates the channel dimension (channel count is determined by the inputs), defaults to the same `cla.zarr` relative channel order, computes per-channel statistics over the merged data, and writes the normalized Zarr plus sidecars. `--order` overrides the default but must list every input channel exactly once. Do not normalize each input store separately before merging.
-
-`merge_normalize.py` remains lazy through the final `to_zarr` call and never loads the complete merged dataset into RAM. Its `--output-chunks` option defaults to one time step per chunk with full channel/spatial dimensions; tune the time chunk only after measuring the intended storage and training access pattern.
+`merge_normalize.py` verifies time/grid alignment, merges channel stores, computes shared statistics, and writes one normalized Zarr plus sidecars without loading the full dataset. Its default order follows the same C76-relative rule; `--order` must list every input channel exactly once. Do not normalize component stores first.
 
 ## Normalization Convention
 
-Store normalized values in Zarr: precipitation-like channels such as `tp` are first converted to **mm accumulated values**, then log-transformed with `log1p` (clip min 0, consistent with the core reader's `clamp(0, 7)` in `data_util.unnormalize`); other channels are scaled with `(x - mean) / std` using per-channel statistics. The companion `mean`/`std`/`weight` sidecars record those statistics. Training feeds the Zarr directly (the model forward pass does not re-normalize); evaluation, export, and inference invert the sidecars back to physical values (`inv_normalize`). The core repository states this convention explicitly: "Training datasets are normalized Zarr stores with companion mean/std/weight.npy" and "the last channel is log-transformed precipitation".
-
-## Training vs Inference Data Forms
-
-- **Training** consumes a normalized Zarr store: values are stored as `(x - mean) / std` (with `tp` log-transformed first), and the model forward pass does not re-normalize.
-- **Exported ONNX** (`export_onnx` in the current ViT/Afnonet/GraphCast/GroupVAE/Puyun models): normalization and inverse normalization are baked into the exported graph, so the ONNX model interface takes physical values and returns physical values. The core inference wrapper (`onnx_infer.py`) currently receives normalized inputs in its cascade entry and converts internally. Do not assume this pattern holds for every model: check the export/inference code of the model in use before preparing inference data.
+Training consumes normalized Zarr values directly: accumulated precipitation is converted to mm, log-transformed when required, then all channels use `(x - mean) / std`. Sidecars invert this for evaluation. Current exported ONNX graphs generally expose physical values, while the core cascade wrapper may receive normalized inputs; verify the selected model's export/inference path.
 
 ## Directory Layout
 
@@ -162,11 +148,5 @@ Keep downloaded source data, conversion products, and sidecars in separate, pred
 - Sidecars and static fields: `mean`, `std`, `weight`, `mask`, `land_mask`, `const` files live in the same directory as the Zarr store (`.nc`, `.npy`, or Zarr variables).
 - Naming: use the dataset name from the download plan (for example `s2s.1950-2024.c76`); do not mix multiple test or comparison datasets in one folder.
 
-## Boundary Rules
-
-- Read-only inspection and dry runs come first; no script under this route writes without explicit approval.
-- Zarr mutation requires `zarr_write_guard.py` and the user-approved flags.
-- Never claim training readiness under this route; Data analysis owns that after data exists.
-- Keep credentials out of steps configs, plans, logs, and repository files.
-- When a dataset is not in the data source reference and the user cannot confirm its facts, record the fields as pending confirmation instead of guessing.
+Keep credentials out of steps configs and logs. Unknown scientific requirements remain pending instead of being guessed.
 
