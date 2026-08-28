@@ -24,6 +24,7 @@ Zarr checks:
 - Opens consolidated or non-consolidated.
 - Expected variable exists, usually `data`.
 - Dims match config, usually `time`, `level|channel`, `lat`, `lon`.
+- Grid coordinates are named `lat`/`lon`; converted stores rename CDS `latitude`/`longitude` automatically.
 - Time is sorted and matches `freq`.
 - Channel count matches `in_chans`/`out_chans`.
 - `mean`/`std`/`weight` shapes broadcast correctly.

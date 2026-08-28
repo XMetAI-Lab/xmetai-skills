@@ -1,6 +1,6 @@
 # xmetai-skills
 
-面向 XMetAI 类气象模型工作的 agent skills 仓库，覆盖工作区检查、LazyConfig 审查、Zarr/NetCDF/静态数据检查、模型 shape 调试、训练评估、ONNX 导出和部署审查。
+面向 XMetAI 类气象模型工作的 agent skills 仓库，覆盖工作区检查、气象数据需求提取与确认后下载、大规模数据转换、LazyConfig 审查、Zarr/NetCDF/静态数据检查、离线评测与可视化、模型 shape 调试、训练、ONNX 导出和部署审查。
 
 可安装的 skill 目录是：
 
@@ -65,7 +65,10 @@ python -m pytest -q
 打开目标气象模型仓库后，让 agent 使用 `xmetai-weather-modeling` 处理以下任务：
 
 - 创建或审查 LazyConfig。
+- 提取气象数据需求并制定下载前计划；用户确认后，可按已确认清单执行下载。
+- 执行受保护的 NetCDF/Zarr/GRIB 转换、重网格化、归一化 sidecar、静态场和大数据断点续跑流程。
 - 检查 Zarr、NetCDF、静态数据和数据集 contract。
+- 对已有模型输出执行 RMSE、TS、POD、FAR、FB、TCC、PS、IPS 离线评测和结果可视化。
 - 审查模型 contract，调试 tensor shape。
 - 检查训练、评估、实验报告、ONNX 导出和部署流程。
 
@@ -75,6 +78,8 @@ python -m pytest -q
 python skills/xmetai-weather-modeling/scripts/inspect_workspace.py /path/to/xmetai-core
 python skills/xmetai-weather-modeling/scripts/check_config_contract.py /path/to/config.py
 python skills/xmetai-weather-modeling/scripts/inspect_static_nc.py /path/to/static.nc
+python skills/xmetai-weather-modeling/scripts/convert_to_zarr.py --input in.nc --output out.zarr
+python skills/xmetai-weather-modeling/scripts/evaluate_pred.py --pred-dir /path/to/pred
 ```
 
 优先从 `skills/xmetai-weather-modeling/SKILL.md` 开始；它会把 agent 路由到对应任务的 reference 文档和脚本。
@@ -86,7 +91,7 @@ skills/xmetai-weather-modeling/
   SKILL.md                 skill 主入口。
   agents/openai.yaml       agent metadata。
   references/              分任务详细说明。
-  scripts/                 小型只读检查和验证 CLI。
+  scripts/                 检查、受保护转换、评测和可视化 CLI。
   assets/templates/        审查、报告和计划模板。
 docs/                      网站文档页面。
 tests/                     结构和脚本编译测试。

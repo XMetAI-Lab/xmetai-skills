@@ -2,7 +2,7 @@
 
 This page is written for the documentation website. For installation and local setup, use the repository README.
 
-Use `xmetai-weather-modeling` for model development, evaluation/inference, data analysis, or debugging in XMetAI-style weather model repositories.
+Use `xmetai-weather-modeling` for model development, evaluation/inference, data analysis, data download planning, data preprocessing, or debugging in XMetAI-style weather model repositories.
 
 ## Workflow
 
@@ -16,5 +16,8 @@ Use `xmetai-weather-modeling` for model development, evaluation/inference, data 
 
 - Model development: `references/model-contracts.md`
 - Evaluation and inference: `references/inference-export-deploy.md`
+- Offline evaluation and visualization: `references/evaluation-planning.md`
 - Data analysis: `references/zarr-static-contracts.md`
+- Data download planning: `references/data-download-planning.md`
+- Data preprocessing and conversion: `references/data-preprocessing.md`
 - Debugging: `references/shape-debugging.md`
