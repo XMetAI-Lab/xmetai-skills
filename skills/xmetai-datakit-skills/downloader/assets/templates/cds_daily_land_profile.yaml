@@ -1,0 +1,19 @@
+# Fill every REPLACE_* value in a task-specific copy.
+# Endpoint registered in Datakit DATASET_SPECS as of 2026-10-27, but NO local
+# ERA5-Land daily Profile exists. Verify variables/statistics with the official
+# dataset before use; ERA5 single-level daily candidates are not a substitute.
+dataset: derived-era5-land-daily-statistics
+# This endpoint does not require product_type.
+# Builder accepts daily_mean, daily_sum, daily_max, daily_min; remote support
+# for the selected variable/statistic must be checked separately.
+statistics:
+  REPLACE_WITH_DAILY_STATISTIC:
+    variable:
+      - REPLACE_WITH_CDS_VARIABLE
+# Input sampling frequency: 1_hourly, 3_hourly, 6_hourly.
+frequency: REPLACE_WITH_FREQUENCY
+time_zone: REPLACE_WITH_TIME_ZONE
+area: [REPLACE_NORTH, REPLACE_WEST, REPLACE_SOUTH, REPLACE_EAST]
+# area order: north, west, south, east; null requires explicit global scope.
+# No pressure_level, time, data_format or download_format.
+# Dates belong in the Batch; daily output is NetCDF ZIP.

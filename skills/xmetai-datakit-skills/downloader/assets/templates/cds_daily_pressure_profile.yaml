@@ -1,0 +1,25 @@
+# Fill every REPLACE_* value in a task-specific copy.
+# Candidate snapshot: derived-era5-pressure-levels-daily-statistics_pl_mean.yaml,
+# 2026-10-27. Examples only, not the complete CDS catalogue.
+dataset: derived-era5-pressure-levels-daily-statistics
+product_type: reanalysis
+# Observed daily_mean variables: geopotential, specific_humidity, temperature,
+# u_component_of_wind, v_component_of_wind.
+# Builder accepts daily_mean, daily_sum, daily_max, daily_min, but combinations
+# beyond the observed daily_mean profile require dataset-specific verification.
+statistics:
+  REPLACE_WITH_DAILY_STATISTIC:
+    variable:
+      - REPLACE_WITH_CDS_VARIABLE
+# hPa, as quoted strings. Observed:
+# "50", "100", "150", "200", "250", "300", "400",
+# "500", "600", "700", "850", "925", "1000".
+pressure_level:
+  - REPLACE_WITH_PRESSURE_HPA
+# Input sampling: 1_hourly, 3_hourly, 6_hourly; observed: 1_hourly.
+frequency: REPLACE_WITH_FREQUENCY
+# Observed: utc+00:00.
+time_zone: REPLACE_WITH_TIME_ZONE
+area: [REPLACE_NORTH, REPLACE_WEST, REPLACE_SOUTH, REPLACE_EAST]
+# area order: north, west, south, east; null requires explicit global scope.
+# No time, data_format or download_format. Dates belong in the Batch.

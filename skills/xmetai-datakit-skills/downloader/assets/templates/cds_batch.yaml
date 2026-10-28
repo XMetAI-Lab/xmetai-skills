@@ -1,0 +1,45 @@
+# CDS Batch for hourly or daily-statistics Profiles.
+# Copy to a task directory and replace every REPLACE_* value before previewing.
+# Select variables, pressure levels, area and time/statistics in the Profile.
+profiles:
+  # Absolute path, or relative to this Batch file (not the working directory).
+  - path: "REPLACE_WITH_PROFILE_PATH.yaml"
+    # Relative to storage.root_path; choose a distinct subdirectory per Profile.
+    output_subdir: "REPLACE_WITH_OUTPUT_SUBDIR"
+  # Add more Profiles from the CDS source only, for example:
+  # - path: "./profiles/another_cds_profile.yaml"
+  #   output_subdir: "another_cds"
+
+storage:
+  # Absolute path; confirm it with the user before writing.
+  # If unspecified, propose ~/xmetai-downloads/<task-name>/.
+  # Do not default to the skill repo, output/, or the source tree.
+  # Relative paths are resolved against this Batch file.
+  root_path: "/REPLACE_WITH_ABSOLUTE_OUTPUT_DIRECTORY"
+
+# Inclusive whole months, quoted YYYY-MM, e.g. "2020-01" to "2020-02".
+# No automatic latest month, partial-month selection, or forecast lead_hour.
+period:
+  start_month: "REPLACE_WITH_START_MONTH"
+  end_month: "REPLACE_WITH_END_MONTH"
+
+execution:
+  # At least 1 worker; start with 1 to limit remote load.
+  max_workers: 1
+  # Additional retries after the initial attempt; non-negative integer.
+  max_retries: 3
+  # Non-negative wait in seconds between failed attempts.
+  retry_delay_seconds: 30
+  # Continue other tasks after failure; true does not mean all tasks succeeded.
+  continue_on_error: true
+
+# Optional: omit the entire records section to use
+# storage.root_path/_records/<Batch filename without extension>/plan.txt
+# and status.jsonl. If enabled, provide both paths; relative to this Batch file.
+# records:
+#   plan_path: "./records/plan.txt"
+#   status_log_path: "./records/status.jsonl"
+#
+# Execution mode is a CLI option, not a Batch field:
+# run_download.py --repo-root <datakit> --source cds <batch.yaml> --dry-run
+# Use --execute only after confirming the plan; this file does not start a job.

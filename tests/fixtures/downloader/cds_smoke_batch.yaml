@@ -1,0 +1,15 @@
+profiles:
+  - path: ./cds_smoke_profile.yaml
+    output_subdir: era5_t2m
+storage:
+  root_path: ../../../output/downloader_smoke
+# The automated test overrides storage.root_path with a pytest temporary directory.
+# Current Datakit CDS builder requires whole months: 28 daily samples.
+period:
+  start_month: "2021-02"
+  end_month: "2021-02"
+execution:
+  max_workers: 1
+  max_retries: 0
+  retry_delay_seconds: 0
+  continue_on_error: false

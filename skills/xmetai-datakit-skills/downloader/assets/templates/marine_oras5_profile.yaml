@@ -1,0 +1,26 @@
+# Fill every REPLACE_* value in a task-specific copy.
+# Candidate snapshot: cmems_mod_glo_phy-all_my_0.25deg_P1D-m_oras5_daily_v1.yaml,
+# 2026-10-27. Examples only, not the complete Marine catalogue.
+dataset_id: cmems_mod_glo_phy-all_my_0.25deg_P1D-m
+# Candidates: mlotst_oras, siconc_oras, sithick_oras, so_oras,
+# thetao_oras, uo_oras, vo_oras, zos_oras.
+variables:
+  - REPLACE_WITH_MARINE_VARIABLE
+# Bounds are numbers in degrees, NOT strings. Source example:
+# longitude -180.0..179.75, latitude -80.0..90.0; not task defaults.
+longitude:
+  minimum: REPLACE_WEST
+  maximum: REPLACE_EAST
+latitude:
+  minimum: REPLACE_SOUTH
+  maximum: REPLACE_NORTH
+# Depth in metres; source example 0.0..550.0, not a mandatory/full depth range.
+depth:
+  minimum: REPLACE_WITH_MIN_DEPTH
+  maximum: REPLACE_WITH_MAX_DEPTH
+file_tag: REPLACE_WITH_FILE_TAG
+# Optional: add only after verifying the official catalogue; no pinned defaults.
+# dataset_version: REPLACE_WITH_VERIFIED_VERSION
+# dataset_part: REPLACE_WITH_VERIFIED_PART
+# service: REPLACE_WITH_VERIFIED_SERVICE
+# Dates belong in the Batch. No CDS time/pressure_level/area/format fields.

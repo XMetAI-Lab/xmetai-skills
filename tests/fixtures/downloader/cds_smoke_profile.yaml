@@ -1,0 +1,12 @@
+# Small ERA5 download smoke test fixture; not a scientific validation dataset.
+dataset: reanalysis-era5-single-levels
+product_type:
+  - reanalysis
+variable:
+  - 2m_temperature
+time:
+  - "00:00"
+# North, west, south, east: a 0.25-degree box near 30 N, 120 E.
+area: [30.25, 120.0, 30.0, 120.25]
+data_format: netcdf
+download_format: unarchived

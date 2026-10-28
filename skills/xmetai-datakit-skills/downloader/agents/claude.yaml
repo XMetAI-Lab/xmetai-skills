@@ -1,0 +1,23 @@
+# Descriptive metadata only; Claude reads ../SKILL.md for discovery.
+name: downloader
+display_name: XMetAI Datakit Downloader
+short_description: Plan and run CDS or Marine downloads using Datakit conventions.
+default_prompt: >-
+  Use the downloader skill to clarify the data request, inspect the Datakit
+  variable conventions, prepare YAML, and preview tasks offline. Ask for
+  confirmation of the concrete plan before executing the repository downloader.
+  For CDS credentials, offer private user-run terminal setup, script guidance,
+  or fully manual chat instructions with no code execution during setup.
+  For fully manual setup, wait for the user's completion confirmation, then
+  resume the task without requiring a wizard or claiming authentication verified;
+  never collect tokens in chat or run hidden token entry through agent tools.
+inputs:
+  - Natural-language data requirements or an existing Batch YAML
+  - CDS credential setup requests (never the token itself)
+outputs:
+  - Profile and Batch YAML
+  - Download plan and status records
+  - Raw data files after confirmed execution
+entrypoints:
+  - scripts/run_download.py
+  - scripts/setup_cds.py  # Interactive input must be run by the user privately.

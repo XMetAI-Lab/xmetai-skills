@@ -12,8 +12,8 @@ metadata:
 
 # XMetAI Datakit Skills
 
-数据侧技能族的入口。**这里只做分诊，不做实现**——每个成员都是一个完整、可独立
-安装的 skill，与本文件并列在同一个族目录下。
+数据侧技能族的入口。**这里只做分诊，不做实现**——每个成员有自己的输入契约与
+工作流，位于同一个族目录下。是否依赖 Datakit 仓库，以成员文档为准。
 
 ## Start Here
 
@@ -27,6 +27,7 @@ metadata:
 
 | 成员 | 何时用 | 入口 | 状态 |
 |---|---|---|---|
+| `downloader/` | 下载 ERA5 / ERA5-Land / ORAS5，选择变量与数据源，生成配置、预览任务、执行或恢复下载 | `downloader/SKILL.md` | ✅ |
 | `reporting/` | 已有评测产物（`manifest.json` + 结果表），要出图、写报告、多模型对比、台风检验、暴雨个例、空间分布 | `reporting/SKILL.md` | ✅ |
 
 新增成员时：在族目录下建 `<name>/{agents,assets,references,scripts}` 与 `SKILL.md`，
@@ -43,6 +44,7 @@ metadata:
 
 | 请求 | 去向 |
 |---|---|
+| 下载原始资料、选择下载变量 / 区域 / 日期、生成下载配置、预览或恢复下载 | `downloader/SKILL.md` |
 | 评测产物已生成，要出图 / 写报告 / 多模型对比 / 台风 / 暴雨个例 / 空间分布 | `reporting/SKILL.md` |
 | 要**计算**评测指标、跑评测任务 | 不在本族：评测流水线仓库（本族只消费其产物） |
 | 模型配置、Zarr/NetCDF 检查、训练、ONNX 导出、张量排错 | 不在本族：`xmetai-weather-modeling` skill |
@@ -53,13 +55,18 @@ metadata:
 宿主只认**目录根部的 `SKILL.md`**，不会递归发现成员。按需要注册：
 
 ```bash
-# 注册成员：成员自身的触发词（TS / RMSE / 台风 / 暴雨…）才会生效
-ln -s "$(pwd)/skills/xmetai-datakit-skills/reporting" "$CODEX_HOME/skills/reporting"
+# 在 Datakit 仓库根执行；目标宿主的 skills 目录须已存在
+# 注册成员：成员自身的触发词才会生效
+ln -s "$(pwd)/examples/dataset_downloader/xmetai-datakit-skills/downloader" "$CODEX_HOME/skills/downloader"
+ln -s "$(pwd)/examples/dataset_downloader/xmetai-datakit-skills/reporting" "$CODEX_HOME/skills/reporting"
 # 注册本 router：让"该用哪个 / 族里有什么"这类请求也有入口
-ln -s "$(pwd)/skills/xmetai-datakit-skills" "$CODEX_HOME/skills/xmetai-datakit-skills"
+ln -s "$(pwd)/examples/dataset_downloader/xmetai-datakit-skills" "$CODEX_HOME/skills/xmetai-datakit-skills"
 ```
 
-> 只注册容器、不注册成员时，`reporting` 不会被单独检索到——本文件的成员表与
+以上为 Codex 注册示例；VS Code / Copilot 可将成员链接到工作区 `.github/skills/`
+或用户级 `~/.copilot/skills/`，名称与成员 `SKILL.md` 的 name 一致。
+
+> 只注册容器、不注册成员时，成员不会被单独检索到——本文件的成员表与
 > 路由仍可用，但成员自己的触发词不生效。
 > 两者都注册时，**具体请求应由成员命中**，本 router 只接模糊请求。
 
