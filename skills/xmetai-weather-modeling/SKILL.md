@@ -7,9 +7,9 @@ metadata:
 
 # XMetAI Weather Modeling
 
-## Start Here
+## Initial Procedure
 
-1. Locate the active repo and read local rules: `AGENTS.md`, `RTK.md`, `CONTRIBUTING.md`, README.
+1. Locate the active repository and read local rules: `AGENTS.md`, `RTK.md`, `CONTRIBUTING.md`, and README.
 2. Check local changes before editing.
 3. Classify the task: model development, evaluation/inference, data analysis, or debugging.
 4. Load only the matching reference.
@@ -18,8 +18,8 @@ metadata:
 
 - Zarr writes require explicit approval before any write, overwrite, append, delete, in-place merge, rechunk, or store mutation.
 - Prefer read-only inspection and dry runs.
-- Follow repo conventions before adding abstractions.
-- Never claim train/export/deploy/runtime validation unless it actually ran.
+- Follow repository conventions before adding abstractions.
+- Do not claim training, export, deployment, or runtime validation unless it was performed.
 - Keep workflows portable across agent tools unless a runtime is requested.
 
 ## Reference Routing
@@ -31,12 +31,12 @@ metadata:
 
 ## Script Routing
 
-- `inspect_workspace.py`: repo summary.
+- `inspect_workspace.py`: repository summary.
 - `inspect_zarr_schema.py`: read-only Zarr schema/sample.
 - `inspect_static_nc.py`: read-only static NetCDF schema.
-- `check_config_contract.py`, `summarize_lazy_config.py`: config checks.
+- `check_config_contract.py`, `summarize_lazy_config.py`: configuration checks.
 - `build_train_command.py`: print train/eval/export command only.
-- `check_onnx_io.py`: ONNX IO summary.
+- `check_onnx_io.py`: ONNX input/output summary.
 - `zarr_write_guard.py`: mandatory guard for future write scripts.
 - `collect_experiment_report.py`: lightweight report.
 

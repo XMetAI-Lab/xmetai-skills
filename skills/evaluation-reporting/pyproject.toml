@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xmetai-evaluation-skill"
+version = "0.1.0"
+description = "Standalone meteorological evaluation reporting skill"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=1.5",
+  "xarray>=2023.1",
+  "matplotlib>=3.7",
+  "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+spatial = ["zarr>=3.1.6,<4", "numcodecs>=0.14", "netCDF4>=1.6"]
+typhoon = ["basemap>=2.0"]
+test = ["pytest>=7"]
+all = [
+  "zarr>=3.1.6,<4",
+  "numcodecs>=0.14",
+  "netCDF4>=1.6",
+  "basemap>=2.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "scripts"}
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+include = ["reporting*"]

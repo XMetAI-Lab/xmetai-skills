@@ -1,0 +1,32 @@
+# Fill every REPLACE_* value in a task-specific copy, not in this template.
+# Candidate snapshot: Datakit cds_download/profiles, 2026-10-27.
+# Candidates are examples, not the complete CDS catalogue or a default selection.
+dataset: reanalysis-era5-single-levels
+product_type: [reanalysis]
+# Near-surface candidates:
+# 10m_u_component_of_wind, 10m_v_component_of_wind, 2m_dewpoint_temperature,
+# 2m_temperature, mean_sea_level_pressure, skin_temperature, surface_pressure,
+# total_column_water, snow_depth, sea_surface_temperature,
+# 100m_u_component_of_wind, 100m_v_component_of_wind, total_precipitation.
+# Cloud/radiation candidates:
+# low_cloud_cover, medium_cloud_cover, high_cloud_cover, total_cloud_cover,
+# surface_net_solar_radiation, surface_solar_radiation_downwards,
+# total_sky_direct_solar_radiation_at_surface, top_net_thermal_radiation.
+# Wave candidates:
+# model_bathymetry, significant_height_of_combined_wind_waves_and_swell,
+# mean_wave_direction, mean_wave_period, coefficient_of_drag_with_waves.
+# Static candidates:
+# land_sea_mask, slope_of_sub_gridscale_orography,
+# standard_deviation_of_orography, geopotential.
+variable:
+  - REPLACE_WITH_CDS_VARIABLE
+# Unique quoted HH:00 strings; observed: "00:00", "06:00", "12:00", "18:00".
+# Time selection does not aggregate precipitation/radiation into six-hour totals.
+time:
+  - REPLACE_WITH_HH_00
+# [north, west, south, east] in degrees; use null only for explicit global scope.
+area: [REPLACE_NORTH, REPLACE_WEST, REPLACE_SOUTH, REPLACE_EAST]
+# Observed data_format: netcdf; download_format: zip or unarchived.
+data_format: REPLACE_WITH_DATA_FORMAT
+download_format: REPLACE_WITH_DOWNLOAD_FORMAT
+# No pressure_level here. Dates and output directory belong in the Batch.

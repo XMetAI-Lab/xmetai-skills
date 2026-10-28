@@ -1,0 +1,54 @@
+# Optional agent metadata for Codex (OpenAI).
+# Consumed: display_name / short_description / default_prompt.
+# Everything below those is descriptive only and does not affect skill selection;
+# selection is driven by `name` and `description` in ../SKILL.md.
+name: evaluation-reporting
+display_name: XMetAI Evaluation Reporting
+short_description: Turn XMetAI evaluation products into figures and a Markdown report.
+description: >-
+  Consumes standard evaluation product directories (manifest.json + result tables)
+  and produces figures plus a six-chapter Markdown report. Metric computation is
+  out of scope: this skill reads existing products and never recomputes them.
+default_prompt: >-
+  Use the evaluation-reporting workflow: classify the product directory from
+  manifest.json.resolved_config.pipeline, check caliber consistency across sources,
+  then run the matching renderer to produce figures and REPORT.md.
+when_to_use:
+  - An evaluation result directory already exists and a report or figures are requested.
+  - Several models must be compared on TS / RMSE / typhoon track and intensity errors.
+  - Rainstorm case analysis or monthly-mean spatial distribution maps are requested.
+when_not_to_use:
+  - Evaluation metrics must be computed or the evaluation job must be run.
+  - The task is model config, data checks, training, ONNX export, or tensor debugging.
+inputs:
+  - manifest.json
+  - diagnostics/categorical_wide.csv
+  - diagnostics/probability_wide.csv
+  - scores.csv
+  - typhoon/tc*.csv with matching *_meta.json
+outputs:
+  - REPORT.md
+  - "*.svg"
+  - "*.png"
+entrypoints:
+  - scripts/render_report.py
+  - scripts/render_det_report.py
+  - scripts/render_ens_report.py
+  - scripts/render_wave_report.py
+  - scripts/render_rainstorm_report.py
+  - scripts/render_rainstorm_summary.py
+  - scripts/render_spatial_distribution.py
+  - scripts/extract_spatial_distribution.py
+  - scripts/extract_spatial_distribution_ens.py
+dependencies:
+  required:
+    - numpy
+    - pandas
+    - xarray
+    - matplotlib
+    - scipy
+  optional:
+    - zarr
+    - numcodecs
+    - netCDF4
+    - basemap

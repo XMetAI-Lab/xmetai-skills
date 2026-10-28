@@ -12,3 +12,4 @@ venv/
 output/
 reports/
 *.log
+.cdsapirc
