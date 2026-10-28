@@ -1,13 +1,13 @@
 # Environment setup for the reporting skill.
 #
 # The single source of truth for dependency versions and extras is
-# skills/xmetai-datakit-skills/reporting/pyproject.toml. This file only
+# skills/evaluation-reporting/pyproject.toml. This file only
 # points at it — do not duplicate the dependency list here.
 #
 # Default: editable install of the skill + runtime + test dependencies.
--e ./skills/xmetai-datakit-skills/reporting[test]
+-e ./skills/evaluation-reporting[test]
 
 # Optional: spatial extraction (zarr / numcodecs / netCDF4) and typhoon maps
 # (basemap, needs GEOS). Extras are additive, so use the line below instead
 # of the default one when you need them.
-# -e ./skills/xmetai-datakit-skills/reporting[spatial,typhoon,test]
+# -e ./skills/evaluation-reporting[spatial,typhoon,test]

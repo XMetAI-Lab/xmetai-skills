@@ -10,7 +10,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills" / "xmetai-datakit-skills" / "downloader"
+SKILL = ROOT / "skills" / "dataset-downloader"
 ENTRY = SKILL / "scripts/run_download.py"
 
 
@@ -95,7 +95,7 @@ def test_copied_entry_dispatches_to_explicit_repository(
 
 
 def test_repository_is_found_from_script_ancestors(tmp_path, repository):
-    copied = repository / "skills/downloader/scripts/run_download.py"
+    copied = repository / "skills/dataset-downloader/scripts/run_download.py"
     copied.parent.mkdir(parents=True)
     shutil.copyfile(ENTRY, copied)
     batch = tmp_path / "batch.yaml"

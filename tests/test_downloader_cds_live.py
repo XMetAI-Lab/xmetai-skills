@@ -39,9 +39,9 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURES = ROOT / "tests" / "fixtures" / "downloader"
+FIXTURES = ROOT / "tests" / "fixtures" / "dataset-downloader"
 ENTRY = (
-    ROOT / "skills" / "xmetai-datakit-skills" / "downloader"
+    ROOT / "skills" / "dataset-downloader"
     / "scripts" / "run_download.py"
 )
 

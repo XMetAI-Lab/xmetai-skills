@@ -12,7 +12,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SKILL_ROOT = REPO_ROOT / "skills" / "xmetai-datakit-skills" / "reporting"
+SKILL_ROOT = REPO_ROOT / "skills" / "evaluation-reporting"
 
 # 运行库需要科学计算栈；裸环境（只装了 pytest）直接跳过，CI 装齐全后再真正执行。
 pytest.importorskip("numpy")
@@ -41,7 +41,7 @@ sys.meta_path.insert(0, BlockRepositoryPackages())
 @pytest.fixture(scope="module")
 def standalone(tmp_path_factory):
     root = tmp_path_factory.mktemp("standalone-skill")
-    skill = root / ".claude" / "skills" / "reporting"
+    skill = root / ".claude" / "skills" / "evaluation-reporting"
     shutil.copytree(
         SKILL_ROOT, skill,
         ignore=shutil.ignore_patterns("__pycache__", "*.egg-info", ".pytest_cache", "build"),

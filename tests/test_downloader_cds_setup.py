@@ -26,7 +26,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = (
-    ROOT / "skills" / "xmetai-datakit-skills" / "downloader"
+    ROOT / "skills" / "dataset-downloader"
     / "scripts" / "setup_cds.py"
 )
 FAKE_TOKEN = "test-only-not-a-real-token"

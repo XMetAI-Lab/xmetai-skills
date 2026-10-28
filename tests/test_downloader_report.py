@@ -16,8 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
     ROOT
     / "skills"
-    / "xmetai-datakit-skills"
-    / "downloader"
+    / "dataset-downloader"
     / "scripts"
     / "render_download_report.py"
 )

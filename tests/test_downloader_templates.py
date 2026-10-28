@@ -29,7 +29,7 @@ import pytest
 
 yaml = pytest.importorskip("yaml")
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills" / "xmetai-datakit-skills" / "downloader"
+SKILL = ROOT / "skills" / "dataset-downloader"
 TEMPLATES = SKILL / "assets" / "templates"
 CASES = [
     ("cds_hourly_single", "2m_temperature"),
@@ -86,9 +86,9 @@ def test_batch_templates_require_confirmed_home_default():
 
 def test_skill_requires_confirmed_output_root():
     text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    assert "必须与用户确认 `storage.root_path`" in text
-    assert "~/xmetai-downloads/<任务名>/" in text
-    assert "不要默认使用\nskill 仓库、`output/`" in text
+    assert "obtain confirmation of `storage.root_path`" in text
+    assert "~/xmetai-downloads/<task-name>/" in text
+    assert "do not default to the skill repository, `output/`, Datakit source" in text
 
 
 def test_filled_profile_fields(filled_profile):
